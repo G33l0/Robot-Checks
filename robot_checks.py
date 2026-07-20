@@ -4,7 +4,7 @@ Robot-Checks v1.3 - Multi-Checker Tool
 Author: IamG2
 Features: dynamic checkers, concurrency, proxy rotation, delay, color UI,
           separate output files per checker with timestamps,
-          graceful Ctrl+C handling.
+          graceful Ctrl+C handling, Python 3.6+ compatible.
 """
 import os
 import sys
@@ -255,23 +255,27 @@ class CheckerRunner:
             # Cancel pending futures
             for f in future_to_cred:
                 f.cancel()
-            # Shutdown executor without waiting for running tasks (they will be interrupted)
-            executor.shutdown(wait=False, cancel_futures=True)
-            # Close files
+            # Shutdown executor with compatibility for Python <3.9
+            if hasattr(executor, 'shutdown'):
+                try:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    # Python <3.9: cancel_futures not supported
+                    executor.shutdown(wait=False)
+            else:
+                # Very old Python fallback
+                executor.shutdown(wait=False)
+            raise  # Re-raise to let main handler catch and exit
+
+        except Exception as e:
+            # Unexpected error: ensure files are closed before re-raising
             self.close_files()
-            # Print partial summary
-            print(f"{Fore.CYAN}=== Check Interrupted ===")
-            print(f"{Fore.GREEN}Valid: {self.valid_count}")
-            print(f"{Fore.RED}Invalid: {self.invalid_count}")
-            print(f"{Fore.YELLOW}Processed: {self.processed} / {self.total}")
-            if self.valid_count + self.invalid_count > 0:
-                print(f"{Fore.CYAN}Valid results saved to: {self.valid_file}")
-                print(f"{Fore.CYAN}Invalid results saved to: {self.invalid_file}")
-            sys.exit(0)
+            raise
 
-        # Normal completion: close files and show summary
-        self.close_files()
+        finally:
+            self.close_files()
 
+        # Normal completion: show summary
         summary = {
             "total": self.total,
             "valid": self.valid_count,
@@ -325,7 +329,11 @@ class RobotChecksUI:
         self.running = True
 
     def banner(self):
-        os.system('cls' if os.name == 'nt' else 'clear')
+        # Clear screen with fallback
+        try:
+            os.system('cls' if os.name == 'nt' else 'clear')
+        except:
+            pass
         try:
             fig = pyfiglet.Figlet(font='slant')
             banner_text = fig.renderText('Robot-Checks')
@@ -425,7 +433,11 @@ class RobotChecksUI:
             return
 
         runner = CheckerRunner(checker_func, checker_name, self.config)
-        runner.run(credentials)
+        try:
+            runner.run(credentials)
+        except KeyboardInterrupt:
+            print(f"\n{Fore.YELLOW}Check interrupted by user. Exiting...")
+            sys.exit(0)
         input("Press Enter to continue.")
 
     def config_menu(self):
