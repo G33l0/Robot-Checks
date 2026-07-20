@@ -343,7 +343,7 @@ class RobotChecksUI:
         print(Fore.WHITE + f"                    v{VERSION} - Multi-Checker Tool\n")
         print(Fore.YELLOW + "                              Author: IamG2")
         print(Fore.CYAN + "=" * 60)
-        print(Fore.CYAN + "Multi-Checker Tool - Expandable & Colorful")
+        print(Fore.CYAN + "Multi-Checker Tool")
         print(Fore.CYAN + "=" * 60 + "\n")
 
     def main_menu(self):
