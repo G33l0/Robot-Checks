@@ -36,6 +36,7 @@ colorama_init(autoreset=True)
 CONFIG_FILE = "config.json"
 CHECKERS_FOLDER = "checkers"
 OUTPUT_DIR = "output"
+VERSION = "1.3"
 DEFAULT_CONFIG = {
     "input_file": "input.txt",
     "threads": 10,
@@ -331,7 +332,8 @@ class RobotChecksUI:
         except:
             banner_text = "Robot-Checks\n"
         print(Fore.RED + banner_text)
-        print(Fore.YELLOW + Style.BRIGHT + "by IamG2".center(60))
+        print(Fore.WHITE + f"                    v{VERSION} - Multi-Checker Tool\n")
+        print(Fore.YELLOW + "                              Author: IamG2")
         print(Fore.CYAN + "=" * 60)
         print(Fore.CYAN + "Multi-Checker Tool - Expandable & Colorful")
         print(Fore.CYAN + "=" * 60 + "\n")
