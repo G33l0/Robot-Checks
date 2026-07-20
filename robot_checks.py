@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Robot-Checks v1.0 - Multi-Checker Tool
+Robot-Checks v1.1 - Multi-Checker Tool
 Author: IamG2
+Features: dynamic checkers, concurrency, proxy rotation, delay, color UI
 """
 import os
 import sys
 import json
 import time
+import random
 import threading
 import queue
 import importlib.util
@@ -19,7 +21,7 @@ try:
     import colorama
     from colorama import Fore, Style, init as colorama_init
     import pyfiglet
-    import requests   # optional but strongly recommended for checkers
+    import requests   # used by checkers; we import it for availability
 except ImportError as e:
     print("Missing required libraries. Please install:")
     print("  pip install colorama pyfiglet requests")
@@ -35,7 +37,9 @@ DEFAULT_CONFIG = {
     "output_file": "results.txt",
     "threads": 10,
     "timeout": 10,
-    "verbose": False
+    "verbose": False,
+    "delay": 0.5,          # seconds between requests (per thread)
+    "proxy_file": "proxies.txt"
 }
 
 # ---------- Configuration Manager ----------
@@ -66,6 +70,35 @@ class ConfigManager:
     def set(self, key: str, value):
         self.config[key] = value
         self.save_config()
+
+# ---------- Proxy Manager (thread-safe) ----------
+class ProxyManager:
+    def __init__(self, proxy_file: str = None):
+        self.proxies = []
+        self.lock = threading.Lock()
+        self.current_index = 0
+        if proxy_file and os.path.exists(proxy_file):
+            try:
+                with open(proxy_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            self.proxies.append(line)
+                if self.proxies:
+                    print(f"{Fore.GREEN}Loaded {len(self.proxies)} proxies from {proxy_file}")
+                else:
+                    print(f"{Fore.YELLOW}No valid proxies found in {proxy_file}")
+            except Exception as e:
+                print(f"{Fore.RED}Error reading proxy file: {e}")
+
+    def get_proxy(self) -> Optional[str]:
+        """Return next proxy in round-robin fashion (thread-safe)."""
+        if not self.proxies:
+            return None
+        with self.lock:
+            proxy = self.proxies[self.current_index % len(self.proxies)]
+            self.current_index += 1
+            return proxy
 
 # ---------- Checker Loader ----------
 class CheckerLoader:
@@ -133,6 +166,14 @@ class CheckerRunner:
         self.processed = 0
         self.valid_count = 0
         self.invalid_count = 0
+        self.proxy_manager = None
+        proxy_file = config.get("proxy_file")
+        if proxy_file and os.path.exists(proxy_file):
+            self.proxy_manager = ProxyManager(proxy_file)
+        else:
+            # Optionally print a message if proxy file doesn't exist
+            if proxy_file:
+                print(f"{Fore.YELLOW}Proxy file '{proxy_file}' not found. Proceeding without proxies.")
 
     def _print_result(self, email: str, password: str, success: bool, message: str):
         with self.print_lock:
@@ -165,14 +206,16 @@ class CheckerRunner:
 
         threads = self.config.get("threads", 10)
         timeout = self.config.get("timeout", 10)
+        delay = self.config.get("delay", 0)
 
-        print(f"\n{Fore.CYAN}Starting checks with {threads} threads (timeout={timeout}s)...")
+        print(f"\n{Fore.CYAN}Starting checks with {threads} threads (timeout={timeout}s, delay={delay}s)...")
         print(f"{Fore.CYAN}Total credentials: {self.total}\n")
 
         with ThreadPoolExecutor(max_workers=threads) as executor:
             future_to_cred = {}
             for email, password in credentials:
-                future = executor.submit(self._check_one, email, password, timeout)
+                # Submit with delay and proxy assignment already inside _check_one
+                future = executor.submit(self._check_one, email, password, timeout, delay)
                 future_to_cred[future] = (email, password)
 
             for future in as_completed(future_to_cred):
@@ -198,7 +241,19 @@ class CheckerRunner:
             print(f"{Fore.CYAN}Results saved to: {output_file}")
         return summary
 
-    def _check_one(self, email: str, password: str, timeout: int) -> Tuple[bool, str]:
+    def _check_one(self, email: str, password: str, timeout: int, delay: float) -> Tuple[bool, str]:
+        """
+        Single check with proxy assignment, delay, and timeout enforcement.
+        """
+        # Set thread-local proxy
+        proxy = self.proxy_manager.get_proxy() if self.proxy_manager else None
+        threading.current_thread().proxy = proxy
+
+        # Apply delay with jitter
+        if delay > 0:
+            jitter = random.uniform(0.8, 1.2)
+            time.sleep(delay * jitter)
+
         result_queue = queue.Queue()
 
         def target():
@@ -332,13 +387,15 @@ class RobotChecksUI:
         while True:
             self.banner()
             print(f"{Fore.WHITE}Configuration:")
-            print(f"  {Fore.CYAN}1. Input file  : {self.config.get('input_file')}")
-            print(f"  {Fore.CYAN}2. Output file : {self.config.get('output_file')}")
-            print(f"  {Fore.CYAN}3. Threads     : {self.config.get('threads')}")
-            print(f"  {Fore.CYAN}4. Timeout (s) : {self.config.get('timeout')}")
-            print(f"  {Fore.CYAN}5. Verbose     : {self.config.get('verbose')}")
+            print(f"  {Fore.CYAN}1. Input file   : {self.config.get('input_file')}")
+            print(f"  {Fore.CYAN}2. Output file  : {self.config.get('output_file')}")
+            print(f"  {Fore.CYAN}3. Threads      : {self.config.get('threads')}")
+            print(f"  {Fore.CYAN}4. Timeout (s)  : {self.config.get('timeout')}")
+            print(f"  {Fore.CYAN}5. Verbose      : {self.config.get('verbose')}")
+            print(f"  {Fore.CYAN}6. Delay (s)    : {self.config.get('delay')}")
+            print(f"  {Fore.CYAN}7. Proxy file   : {self.config.get('proxy_file')}")
             print(f"  {Fore.CYAN}0. Back")
-            choice = input(f"{Fore.YELLOW}Select [0-5]: ").strip()
+            choice = input(f"{Fore.YELLOW}Select [0-7]: ").strip()
             if choice == "0":
                 return
             elif choice == "1":
@@ -359,6 +416,16 @@ class RobotChecksUI:
                     self.config.set("timeout", int(val))
             elif choice == "5":
                 self.config.set("verbose", not self.config.get("verbose", False))
+            elif choice == "6":
+                val = input("Delay between requests (seconds, e.g., 0.5): ").strip()
+                try:
+                    if val:
+                        self.config.set("delay", float(val))
+                except ValueError:
+                    print(f"{Fore.RED}Invalid number.")
+            elif choice == "7":
+                val = input("Proxy file path (leave empty to disable): ").strip()
+                self.config.set("proxy_file", val if val else "")
             else:
                 print(f"{Fore.RED}Invalid.")
                 input("Press Enter.")
@@ -377,4 +444,4 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    main() 
+    main()
