@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Robot-Checks v1.2 - Multi-Checker Tool
+Robot-Checks v1.3 - Multi-Checker Tool
 Author: IamG2
 Features: dynamic checkers, concurrency, proxy rotation, delay, color UI,
-          separate output files per checker with timestamps.
+          separate output files per checker with timestamps,
+          graceful Ctrl+C handling.
 """
 import os
 import sys
@@ -15,7 +16,7 @@ import queue
 import importlib.util
 import traceback
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from typing import Dict, List, Callable, Optional, Tuple
 
 # ---------- Check for required libraries ----------
@@ -211,6 +212,13 @@ class CheckerRunner:
 
             self.results.append((email, password, success, message))
 
+    def close_files(self):
+        """Close output file handles."""
+        if hasattr(self, 'valid_fh') and not self.valid_fh.closed:
+            self.valid_fh.close()
+        if hasattr(self, 'invalid_fh') and not self.invalid_fh.closed:
+            self.invalid_fh.close()
+
     def run(self, credentials: List[Tuple[str, str]]) -> Dict:
         self.total = len(credentials)
         self.processed = 0
@@ -225,12 +233,14 @@ class CheckerRunner:
         print(f"\n{Fore.CYAN}Starting checks with {threads} threads (timeout={timeout}s, delay={delay}s)...")
         print(f"{Fore.CYAN}Total credentials: {self.total}\n")
 
-        with ThreadPoolExecutor(max_workers=threads) as executor:
-            future_to_cred = {}
+        executor = ThreadPoolExecutor(max_workers=threads)
+        future_to_cred = {}
+        try:
             for email, password in credentials:
                 future = executor.submit(self._check_one, email, password, timeout, delay)
                 future_to_cred[future] = (email, password)
 
+            # Process results as they complete
             for future in as_completed(future_to_cred):
                 email, password = future_to_cred[future]
                 try:
@@ -239,9 +249,27 @@ class CheckerRunner:
                     success, message = False, f"Error: {str(e)}"
                 self._print_result(email, password, success, message)
 
-        # Close file handles
-        self.valid_fh.close()
-        self.invalid_fh.close()
+        except KeyboardInterrupt:
+            print(f"\n{Fore.YELLOW}Interrupted by user. Shutting down gracefully...")
+            # Cancel pending futures
+            for f in future_to_cred:
+                f.cancel()
+            # Shutdown executor without waiting for running tasks (they will be interrupted)
+            executor.shutdown(wait=False, cancel_futures=True)
+            # Close files
+            self.close_files()
+            # Print partial summary
+            print(f"{Fore.CYAN}=== Check Interrupted ===")
+            print(f"{Fore.GREEN}Valid: {self.valid_count}")
+            print(f"{Fore.RED}Invalid: {self.invalid_count}")
+            print(f"{Fore.YELLOW}Processed: {self.processed} / {self.total}")
+            if self.valid_count + self.invalid_count > 0:
+                print(f"{Fore.CYAN}Valid results saved to: {self.valid_file}")
+                print(f"{Fore.CYAN}Invalid results saved to: {self.invalid_file}")
+            sys.exit(0)
+
+        # Normal completion: close files and show summary
+        self.close_files()
 
         summary = {
             "total": self.total,
