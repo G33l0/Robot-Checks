@@ -1,89 +1,93 @@
 """
-Checker for RDP Arena (www.rdparena.com)
-Author: IamG2
+Checker for RDP Arena (www.rdparena.com) – Improved false‑positive prevention.
 """
 import requests
 from typing import Tuple
 
-# Service endpoints
 BASE_URL = "https://www.rdparena.com/"
 LOGIN_URL = BASE_URL + "payments/login"
-
-# Request timeout (seconds)
 TIMEOUT = 15
 
 def check(email: str, password: str) -> Tuple[bool, str]:
-    """
-    Attempt login to RDP Arena via the /payments/login endpoint.
-    Returns (success: bool, message: str)
-    """
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Origin": BASE_URL,
+        "Referer": BASE_URL
+    })
+
     try:
-        # Prepare login payload – adjust field names if needed
-        # Common ones: 'email', 'password', 'username', etc.
-        payload = {
-            "email": email,
-            "password": password
-        }
+        # Try common field names
+        payloads = [
+            {"email": email, "password": password},
+            {"username": email, "password": password},
+            {"login": email, "password": password}
+        ]
 
-        # Optional headers – some services require a User-Agent
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/plain, */*"
-        }
+        for payload in payloads:
+            response = session.post(
+                LOGIN_URL,
+                data=payload,
+                timeout=TIMEOUT,
+                allow_redirects=False
+            )
 
-        # POST request with redirects disabled to catch redirection
-        response = requests.post(
-            LOGIN_URL,
-            data=payload,
-            headers=headers,
-            timeout=TIMEOUT,
-            allow_redirects=False
-        )
-
-        # --- Determine success based on response ---
-
-        # 1. HTTP 302/301 redirect usually means login success
-        if response.status_code in (301, 302):
-            # Check if redirect location is a dashboard or home
-            location = response.headers.get("Location", "")
-            if "dashboard" in location.lower() or "account" in location.lower() or "home" in location.lower():
-                return True, "Login successful (redirect to dashboard)"
-            else:
-                return True, f"Login successful (redirect to {location})"
-
-        # 2. HTTP 200 – examine JSON or HTML
-        if response.status_code == 200:
-            # Try to parse as JSON
-            try:
-                data = response.json()
-                # Look for success indicator – common keys: 'status', 'success', 'message'
-                if data.get("status") == "success" or data.get("success") is True:
-                    return True, "Login successful (JSON response)"
+            # --- Redirect = success ---
+            if response.status_code in (301, 302):
+                location = response.headers.get("Location", "")
+                if any(word in location.lower() for word in ["dashboard", "account", "home", "panel"]):
+                    return True, f"Login successful (redirect to {location})"
                 else:
-                    # If there is an error message, return it
-                    error_msg = data.get("message") or data.get("error") or "Invalid credentials"
-                    return False, f"Login failed: {error_msg}"
-            except ValueError:
-                # Not JSON – check HTML for typical success messages
+                    # Still a redirect – likely success
+                    return True, f"Login successful (redirect to {location})"
+
+            # --- 200 OK – inspect content ---
+            if response.status_code == 200:
                 html = response.text.lower()
-                if "welcome" in html or "dashboard" in html or "logout" in html:
-                    return True, "Login successful (HTML content)"
-                elif "invalid" in html or "incorrect" in html or "error" in html:
-                    return False, "Login failed (HTML indicates error)"
-                else:
-                    # Ambiguous – we can treat as failure or success based on context
-                    # Safer to treat as failure unless we are certain
-                    return False, "Login response ambiguous (no clear success indicator)"
 
-        # 3. Other status codes (400, 401, 403, 500, etc.)
-        else:
-            return False, f"HTTP {response.status_code}: {response.reason}"
+                # 1. Check for explicit error messages
+                error_keywords = ["invalid", "incorrect", "error", "failed", "wrong", "not found"]
+                if any(keyword in html for keyword in error_keywords):
+                    return False, "Login failed (error message found)"
+
+                # 2. Check if the page contains a login form (failure)
+                if 'action="login"' in html or 'action="/login"' in html or 'name="password"' in html:
+                    return False, "Login failed (login form present)"
+
+                # 3. Check for success indicators
+                success_keywords = ["dashboard", "logout", "welcome back", "account overview"]
+                if any(keyword in html for keyword in success_keywords):
+                    return True, "Login successful (content marker)"
+
+                # 4. Check for JSON response (if any)
+                if response.headers.get('content-type', '').startswith('application/json'):
+                    try:
+                        data = response.json()
+                        if data.get("status") in ("success", "ok") or data.get("success") is True:
+                            return True, "Login successful (JSON)"
+                        else:
+                            return False, f"Login failed: {data.get('message', 'unknown')}"
+                    except:
+                        pass
+
+                # 5. Fallback: if we have a session cookie after POST, might be success
+                if session.cookies.get_dict():
+                    return True, "Login successful (session cookie set)"
+
+                # 6. No clear indicator – treat as failure to avoid false positives
+                return False, "Login response ambiguous (treated as failure)"
+
+            # --- Other status codes ---
+            else:
+                return False, f"HTTP {response.status_code}: {response.reason}"
+
+        return False, "All login field variations failed"
 
     except requests.exceptions.Timeout:
         return False, "Request timed out"
     except requests.exceptions.ConnectionError:
-        return False, "Connection error (check network or URL)"
-    except requests.exceptions.RequestException as e:
-        return False, f"Request error: {str(e)}"
+        return False, "Connection error – check network or URL"
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
