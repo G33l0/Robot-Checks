@@ -21,4 +21,5 @@ response = session.post(
 print("Status:", response.status_code)
 print("Headers:", response.headers)
 print("Cookies:", session.cookies.get_dict())
-print("Body (first 500 chars):", response.text[:500])
+print("\n--- Full HTML Response ---\n")
+print(response.text)   # Print everything
