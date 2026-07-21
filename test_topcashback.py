@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Debug TopCashback login using requests.
-Prints all details needed to build a working checker.
-"""
 import requests
 import re
 
@@ -19,125 +15,66 @@ session.headers.update({
     "Origin": BASE_URL,
 })
 
-# ---------- STEP 1: GET login page ----------
-print("=" * 60)
-print("STEP 1: GET login page")
-print("=" * 60)
+# GET login page
 resp = session.get(LOGIN_PAGE, timeout=15)
-print(f"Status: {resp.status_code}")
-print(f"Final URL: {resp.url}")
-print(f"Cookies after GET: {session.cookies.get_dict()}")
+print("Login page status:", resp.status_code)
 
-html = resp.text
+# Extract form action
+action_match = re.search(r'<form.*?action="([^"]+)"', resp.text, re.IGNORECASE)
+action_url = action_match.group(1) if action_match else "/logon/"
+if action_url.startswith("/"):
+    action_url = BASE_URL.rstrip("/") + action_url
 
-# Find the form action (the POST URL)
-form_action_match = re.search(r'<form.*?action="([^"]+)"', html, re.IGNORECASE)
-if form_action_match:
-    action_url = form_action_match.group(1)
-    print(f"\nForm action URL: {action_url}")
-    # resolve relative URL
-    if action_url.startswith("/"):
-        action_url = BASE_URL.rstrip("/") + action_url
-    elif not action_url.startswith("http"):
-        action_url = BASE_URL + action_url
-    print(f"Full POST URL: {action_url}")
-else:
-    print("\nNo form action found – trying default POST URL")
-    action_url = BASE_URL + "logon/"
-
-# ---------- STEP 2: Find CSRF token ----------
-print("\n" + "=" * 60)
-print("STEP 2: Look for CSRF token")
-print("=" * 60)
-
-token_patterns = [
-    r'<input.*?name="__RequestVerificationToken".*?value="([^"]+)"',
-    r'<input.*?name="csrfToken".*?value="([^"]+)"',
-    r'<input.*?name="authenticity_token".*?value="([^"]+)"',
-    r'<input.*?name="csrf".*?value="([^"]+)"',
-    r'<meta.*?name="csrf-token".*?content="([^"]+)"',
-]
-csrf_token = None
-token_field = None
-
-for pattern in token_patterns:
-    match = re.search(pattern, html, re.IGNORECASE)
-    if match:
-        csrf_token = match.group(1)
-        # find the field name from the actual input
-        field_match = re.search(r'<input.*?name="([^"]+)".*?value="' + re.escape(csrf_token) + '"', html, re.IGNORECASE)
-        if field_match:
-            token_field = field_match.group(1)
-        else:
-            # try common names
-            for common in ["__RequestVerificationToken", "csrfToken", "authenticity_token", "csrf"]:
-                if common in html:
-                    token_field = common
-                    break
-        break
-
-if csrf_token:
-    print(f"Found CSRF token: {csrf_token}")
-    print(f"Token field name: {token_field}")
-else:
-    print("No CSRF token found.")
-
-# ---------- STEP 3: Build payload ----------
+# Build payload (no token)
 payload = {
     "Email": EMAIL,
     "Password": PASSWORD,
     "RedirectURL": "/home/"
 }
-if csrf_token and token_field:
-    payload[token_field] = csrf_token
 
-print("\n" + "=" * 60)
-print("STEP 3: POST credentials")
-print("=" * 60)
-print(f"POST URL: {action_url}")
-print(f"Payload: {payload}")
-
+# POST
 post_resp = session.post(action_url, data=payload, allow_redirects=True, timeout=15)
+print("POST status:", post_resp.status_code)
+print("Final URL:", post_resp.url)
 
-print(f"\nPOST Status: {post_resp.status_code}")
-print(f"Final URL after POST: {post_resp.url}")
-print(f"Cookies after POST: {session.cookies.get_dict()}")
-
-# ---------- STEP 4: Save and inspect response ----------
-with open("topcashback_response.html", "w", encoding="utf-8") as f:
+# Save full HTML
+with open("topcashback_response_full.html", "w", encoding="utf-8") as f:
     f.write(post_resp.text)
-print("\nFull HTML saved to topcashback_response.html")
+print("\nFull HTML saved to topcashback_response_full.html")
 
-# Print first 1000 chars
-print("\n" + "=" * 60)
-print("STEP 5: Response snippet (first 1000 chars)")
-print("=" * 60)
-print(post_resp.text[:1000])
+# Look for error messages using common patterns
+error_patterns = [
+    r'<div class="[^"]*error[^"]*">(.*?)</div>',
+    r'<div class="[^"]*alert[^"]*">(.*?)</div>',
+    r'<p class="[^"]*error[^"]*">(.*?)</p>',
+    r'<span class="[^"]*error[^"]*">(.*?)</span>',
+    r'Invalid',
+    r'Incorrect',
+    r'Wrong',
+    r'failed',
+]
 
-# Check for error messages
-html_lower = post_resp.text.lower()
-if "invalid" in html_lower or "incorrect" in html_lower or "error" in html_lower:
-    print("\n*** Error message detected in HTML ***")
-    # Try to extract error div
-    error_match = re.search(r'<div class="alert alert-danger">(.*?)</div>', post_resp.text, re.IGNORECASE | re.DOTALL)
-    if error_match:
-        print(f"Error message: {error_match.group(1).strip()}")
+print("\nSearching for error messages...")
+for pattern in error_patterns:
+    if pattern.startswith(r'<'):
+        matches = re.findall(pattern, post_resp.text, re.IGNORECASE | re.DOTALL)
+        if matches:
+            print(f"Found with pattern {pattern}: {matches[0][:200]}")
     else:
-        # Try other common error containers
-        error_match = re.search(r'<div class="error">(.*?)</div>', post_resp.text, re.IGNORECASE | re.DOTALL)
-        if error_match:
-            print(f"Error message: {error_match.group(1).strip()}")
-        else:
-            print("Could not extract specific error message.")
+        if re.search(pattern, post_resp.text, re.IGNORECASE):
+            print(f"Keyword '{pattern}' found in HTML")
 
 # Check for success indicators
-if "log out" in html_lower or "logout" in html_lower:
-    print("\n*** SUCCESS INDICATOR: 'log out' found ***")
-if "welcome" in html_lower:
-    print("\n*** SUCCESS INDICATOR: 'welcome' found ***")
-if "my account" in html_lower:
-    print("\n*** SUCCESS INDICATOR: 'my account' found ***")
+html = post_resp.text.lower()
+if "log out" in html or "logout" in html:
+    print("*** SUCCESS: 'log out' found ***")
+if "welcome" in html:
+    print("*** SUCCESS: 'welcome' found ***")
+if "my account" in html:
+    print("*** SUCCESS: 'my account' found ***")
+if "dashboard" in html:
+    print("*** SUCCESS: 'dashboard' found ***")
 
-print("\n" + "=" * 60)
-print("DEBUG COMPLETE")
-print("=" * 60)
+# Print first 5000 chars to inspect
+print("\n--- HTML snippet (first 5000 chars) ---")
+print(post_resp.text[:5000])
