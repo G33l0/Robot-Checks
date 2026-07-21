@@ -5,7 +5,7 @@ Author: IamG2
 Features: dynamic checkers, concurrency, proxy rotation, delay, color UI,
           separate output files per checker with timestamps,
           graceful Ctrl+C handling, Python 3.6+ compatible,
-          adaptive banner for all screen sizes.
+          adaptive banner, built-in log converter.
 """
 import os
 import sys
@@ -16,7 +16,8 @@ import threading
 import queue
 import importlib.util
 import traceback
-import shutil          # for terminal size
+import shutil
+import re
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from typing import Dict, List, Callable, Optional, Tuple
@@ -341,13 +342,13 @@ class RobotChecksUI:
         try:
             term_width = shutil.get_terminal_size().columns
         except:
-            term_width = 80  # fallback
+            term_width = 80
 
         # Choose figlet font based on width
         if term_width < 80:
-            font = "standard"   # narrower, more compact
+            font = "standard"
         else:
-            font = "slant"      # classic wide
+            font = "slant"
 
         try:
             fig = pyfiglet.Figlet(font=font, width=term_width)
@@ -355,7 +356,6 @@ class RobotChecksUI:
         except:
             banner_text = "Robot-Checks\n"
 
-        # Print with colors
         print(Fore.RED + banner_text)
         print(Fore.WHITE + f"                    v{VERSION} - Multi-Checker Tool\n")
         print(Fore.YELLOW + "                              Author: IamG2")
@@ -368,19 +368,122 @@ class RobotChecksUI:
             self.banner()
             print(f"{Fore.WHITE}Main Menu:")
             print(f"  {Fore.CYAN}1. Checkers")
-            print(f"  {Fore.CYAN}2. Config")
-            print(f"  {Fore.CYAN}3. Exit")
-            choice = input(f"{Fore.YELLOW}Select option [1-3]: ").strip()
+            print(f"  {Fore.CYAN}2. Convert Logs")
+            print(f"  {Fore.CYAN}3. Config")
+            print(f"  {Fore.CYAN}4. Exit")
+            choice = input(f"{Fore.YELLOW}Select option [1-4]: ").strip()
             if choice == "1":
                 self.checkers_menu()
             elif choice == "2":
-                self.config_menu()
+                self.convert_logs_menu()
             elif choice == "3":
+                self.config_menu()
+            elif choice == "4":
                 self.running = False
                 print(f"{Fore.GREEN}Goodbye!")
             else:
                 print(f"{Fore.RED}Invalid choice.")
                 input("Press Enter to continue.")
+
+    def convert_logs_menu(self):
+        """Convert messy log file to 'email:password' format."""
+        self.banner()
+        print(f"{Fore.WHITE}Convert Messy Logs to Standard Format")
+        print(f"{Fore.CYAN}This tool reads a file with lines like:")
+        print(f"{Fore.CYAN}  Email: user@example.com")
+        print(f"{Fore.CYAN}  Password: secret")
+        print(f"{Fore.CYAN}  Username: john_doe")
+        print(f"{Fore.CYAN}  Password: 123456")
+        print(f"{Fore.CYAN}And outputs 'user:pass' lines, skipping invalid entries.\n")
+
+        default_input = "messy.txt"
+        input_file = input(f"{Fore.YELLOW}Enter path to messy log file [{default_input}]: ").strip()
+        if not input_file:
+            input_file = default_input
+        if not os.path.isfile(input_file):
+            print(f"{Fore.RED}File not found: {input_file}")
+            input("Press Enter to continue.")
+            return
+
+        default_output = "formatted_input.txt"
+        output_file = input(f"{Fore.YELLOW}Enter output file path [{default_output}]: ").strip()
+        if not output_file:
+            output_file = default_output
+
+        try:
+            with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+        except Exception as e:
+            print(f"{Fore.RED}Error reading file: {e}")
+            input("Press Enter to continue.")
+            return
+
+        # Parse and convert
+        identifiers = []  # store email/username lines
+        pass_lines = []   # store password lines
+        email = None
+        password = None
+        output_lines = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Detect Email: or Username:
+            if line.lower().startswith('email:'):
+                email = line.split(':', 1)[1].strip()
+                # If we already have a password from previous line, output and reset
+                if password is not None:
+                    if email and password and not password.startswith('[') and password != '[NOT_SAVED]':
+                        output_lines.append(f"{email}:{password}")
+                    email = None
+                    password = None
+                continue
+            if line.lower().startswith('username:'):
+                email = line.split(':', 1)[1].strip()
+                if password is not None:
+                    if email and password and not password.startswith('[') and password != '[NOT_SAVED]':
+                        output_lines.append(f"{email}:{password}")
+                    email = None
+                    password = None
+                continue
+
+            # Detect Password:
+            if line.lower().startswith('password:'):
+                password = line.split(':', 1)[1].strip()
+                if email is not None:
+                    if email and password and not password.startswith('[') and password != '[NOT_SAVED]':
+                        output_lines.append(f"{email}:{password}")
+                    email = None
+                    password = None
+                continue
+
+            # If line already contains ':' and no prefix, pass through (already formatted)
+            if ':' in line and not line.lower().startswith('email:') and not line.lower().startswith('username:') and not line.lower().startswith('password:'):
+                # likely already in format, just add
+                output_lines.append(line)
+
+            # Otherwise, ignore (metadata lines)
+
+        # After loop, if any leftover
+        if email and password and not password.startswith('[') and password != '[NOT_SAVED]':
+            output_lines.append(f"{email}:{password}")
+
+        # Remove duplicates? We'll keep all, but we can optionally deduplicate if user wants.
+        # We'll keep as is.
+
+        # Write output
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                for line in output_lines:
+                    f.write(line + '\n')
+            print(f"{Fore.GREEN}Conversion complete! Output written to: {output_file}")
+            print(f"{Fore.CYAN}Total entries: {len(output_lines)}")
+        except Exception as e:
+            print(f"{Fore.RED}Error writing output file: {e}")
+
+        input("Press Enter to continue.")
 
     def checkers_menu(self):
         while True:
