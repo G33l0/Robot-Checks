@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import requests
 import re
+from urllib.parse import urljoin
 
 EMAIL = "melissameckley2019@gmail.com"
 PASSWORD = "Password@2026"
@@ -15,66 +16,119 @@ session.headers.update({
     "Origin": BASE_URL,
 })
 
-# GET login page
+# Step 1: GET login page
 resp = session.get(LOGIN_PAGE, timeout=15)
-print("Login page status:", resp.status_code)
+print("GET status:", resp.status_code)
+print("Cookies:", session.cookies.get_dict())
 
-# Extract form action
-action_match = re.search(r'<form.*?action="([^"]+)"', resp.text, re.IGNORECASE)
-action_url = action_match.group(1) if action_match else "/logon/"
-if action_url.startswith("/"):
-    action_url = BASE_URL.rstrip("/") + action_url
+# Save full HTML for inspection
+with open("login_page.html", "w", encoding="utf-8") as f:
+    f.write(resp.text)
+print("\nFull login page saved to login_page.html")
 
-# Build payload (no token)
-payload = {
-    "Email": EMAIL,
-    "Password": PASSWORD,
-    "RedirectURL": "/home/"
-}
+# Step 2: Extract form details
+form_action = None
+form_method = "POST"
+inputs = {}
 
-# POST
-post_resp = session.post(action_url, data=payload, allow_redirects=True, timeout=15)
-print("POST status:", post_resp.status_code)
-print("Final URL:", post_resp.url)
+# Find form tag
+form_match = re.search(r'<form.*?action="([^"]+)".*?>', resp.text, re.IGNORECASE | re.DOTALL)
+if form_match:
+    form_action = form_match.group(1)
+    print(f"\nForm action: {form_action}")
+else:
+    print("\nNo form found, using default action.")
+    form_action = "/logon/"
 
-# Save full HTML
-with open("topcashback_response_full.html", "w", encoding="utf-8") as f:
-    f.write(post_resp.text)
-print("\nFull HTML saved to topcashback_response_full.html")
+# Resolve full URL
+if form_action.startswith("/"):
+    form_action = urljoin(BASE_URL, form_action)
+print(f"Full form action URL: {form_action}")
 
-# Look for error messages using common patterns
-error_patterns = [
-    r'<div class="[^"]*error[^"]*">(.*?)</div>',
-    r'<div class="[^"]*alert[^"]*">(.*?)</div>',
-    r'<p class="[^"]*error[^"]*">(.*?)</p>',
-    r'<span class="[^"]*error[^"]*">(.*?)</span>',
-    r'Invalid',
-    r'Incorrect',
-    r'Wrong',
-    r'failed',
-]
+# Extract all input fields (name and value)
+# Handle both self-closing and normal inputs
+input_pattern = r'<input[^>]*?name="([^"]+)"[^>]*?value="([^"]*)"[^>]*?>'
+for match in re.finditer(input_pattern, resp.text, re.IGNORECASE):
+    name = match.group(1)
+    value = match.group(2)
+    inputs[name] = value
+    print(f"Input: {name} = {value[:50] if len(value) > 50 else value}")
 
-print("\nSearching for error messages...")
-for pattern in error_patterns:
-    if pattern.startswith(r'<'):
-        matches = re.findall(pattern, post_resp.text, re.IGNORECASE | re.DOTALL)
-        if matches:
-            print(f"Found with pattern {pattern}: {matches[0][:200]}")
+# Also capture inputs without value (e.g., email, password)
+input_pattern_no_val = r'<input[^>]*?name="([^"]+)"[^>]*?(?:value="[^"]*")?[^>]*?>'
+for match in re.finditer(input_pattern_no_val, resp.text, re.IGNORECASE):
+    name = match.group(1)
+    if name not in inputs:
+        # Check if it's likely email or password
+        if "email" in name.lower() or "password" in name.lower():
+            inputs[name] = ""  # will be filled later
+            print(f"Input (no value): {name} (will be filled)")
+
+# Step 3: Fill credentials
+# Find the correct field names for email and password
+email_field = None
+password_field = None
+for key in inputs.keys():
+    if "email" in key.lower() and not email_field:
+        email_field = key
+    if "password" in key.lower() and not password_field:
+        password_field = key
+
+if email_field:
+    inputs[email_field] = EMAIL
+else:
+    # Fallback: try common names
+    for common in ["Email", "Username", "login", "user"]:
+        if common in inputs or common.lower() in inputs:
+            inputs[common] = EMAIL
+            email_field = common
+            break
+if password_field:
+    inputs[password_field] = PASSWORD
+else:
+    for common in ["Password", "Pass", "pwd"]:
+        if common in inputs or common.lower() in inputs:
+            inputs[common] = PASSWORD
+            password_field = common
+            break
+
+print(f"\nUsing email field: {email_field}")
+print(f"Using password field: {password_field}")
+
+# Remove any 'captcha' fields if present (they might be empty)
+for key in list(inputs.keys()):
+    if "captcha" in key.lower():
+        print(f"Skipping captcha field: {key}")
+        del inputs[key]
+
+# Step 4: POST
+print("\nAttempting POST with payload:")
+for k, v in inputs.items():
+    if k in [email_field, password_field]:
+        print(f"  {k} = {v}")
     else:
-        if re.search(pattern, post_resp.text, re.IGNORECASE):
-            print(f"Keyword '{pattern}' found in HTML")
+        print(f"  {k} = {v[:20]}..." if len(v) > 20 else f"  {k} = {v}")
 
-# Check for success indicators
-html = post_resp.text.lower()
-if "log out" in html or "logout" in html:
+post_resp = session.post(form_action, data=inputs, allow_redirects=True, timeout=15)
+print("\nPOST status:", post_resp.status_code)
+print("Final URL:", post_resp.url)
+print("Cookies after POST:", session.cookies.get_dict())
+
+# Save response
+with open("post_response.html", "w", encoding="utf-8") as f:
+    f.write(post_resp.text)
+print("\nPOST response saved to post_response.html")
+
+# Check for success
+if "log out" in post_resp.text.lower():
     print("*** SUCCESS: 'log out' found ***")
-if "welcome" in html:
+elif "welcome" in post_resp.text.lower():
     print("*** SUCCESS: 'welcome' found ***")
-if "my account" in html:
+elif "my account" in post_resp.text.lower():
     print("*** SUCCESS: 'my account' found ***")
-if "dashboard" in html:
-    print("*** SUCCESS: 'dashboard' found ***")
-
-# Print first 5000 chars to inspect
-print("\n--- HTML snippet (first 5000 chars) ---")
-print(post_resp.text[:5000])
+else:
+    # Check for error
+    if "invalid" in post_resp.text.lower():
+        print("*** FAIL: error message found ***")
+    else:
+        print("*** UNKNOWN: no clear success/failure indicator ***")
