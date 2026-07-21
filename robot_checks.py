@@ -4,7 +4,8 @@ Robot-Checks v1.3 - Multi-Checker Tool
 Author: IamG2
 Features: dynamic checkers, concurrency, proxy rotation, delay, color UI,
           separate output files per checker with timestamps,
-          graceful Ctrl+C handling, Python 3.6+ compatible.
+          graceful Ctrl+C handling, Python 3.6+ compatible,
+          adaptive banner for all screen sizes.
 """
 import os
 import sys
@@ -15,6 +16,7 @@ import threading
 import queue
 import importlib.util
 import traceback
+import shutil          # for terminal size
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from typing import Dict, List, Callable, Optional, Tuple
@@ -334,16 +336,31 @@ class RobotChecksUI:
             os.system('cls' if os.name == 'nt' else 'clear')
         except:
             pass
+
+        # Determine terminal width for adaptive banner
         try:
-            fig = pyfiglet.Figlet(font='slant')
+            term_width = shutil.get_terminal_size().columns
+        except:
+            term_width = 80  # fallback
+
+        # Choose figlet font based on width
+        if term_width < 80:
+            font = "standard"   # narrower, more compact
+        else:
+            font = "slant"      # classic wide
+
+        try:
+            fig = pyfiglet.Figlet(font=font, width=term_width)
             banner_text = fig.renderText('Robot-Checks')
         except:
             banner_text = "Robot-Checks\n"
+
+        # Print with colors
         print(Fore.RED + banner_text)
         print(Fore.WHITE + f"                    v{VERSION} - Multi-Checker Tool\n")
         print(Fore.YELLOW + "                              Author: IamG2")
         print(Fore.CYAN + "=" * 60)
-        print(Fore.CYAN + "Multi-Checker Tool")
+        print(Fore.CYAN + "Multi-Checker Tool - Expandable & Colorful")
         print(Fore.CYAN + "=" * 60 + "\n")
 
     def main_menu(self):
