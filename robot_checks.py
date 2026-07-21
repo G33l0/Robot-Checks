@@ -5,7 +5,7 @@ Author: IamG2
 Features: dynamic checkers, concurrency, proxy rotation, delay, color UI,
           separate output files per checker with timestamps,
           graceful Ctrl+C handling, Python 3.6+ compatible,
-          adaptive banner, built-in log converter.
+          adaptive banner, built-in log converter (saves to input.txt).
 """
 import os
 import sys
@@ -386,7 +386,7 @@ class RobotChecksUI:
                 input("Press Enter to continue.")
 
     def convert_logs_menu(self):
-        """Convert messy log file to 'email:password' format."""
+        """Convert messy log file to 'email:password' format and save as input.txt."""
         self.banner()
         print(f"{Fore.WHITE}Convert Messy Logs to Standard Format")
         print(f"{Fore.CYAN}This tool reads a file with lines like:")
@@ -394,7 +394,7 @@ class RobotChecksUI:
         print(f"{Fore.CYAN}  Password: secret")
         print(f"{Fore.CYAN}  Username: john_doe")
         print(f"{Fore.CYAN}  Password: 123456")
-        print(f"{Fore.CYAN}And outputs 'user:pass' lines, skipping invalid entries.\n")
+        print(f"{Fore.CYAN}And outputs 'identifier:password' lines, skipping invalid entries.\n")
 
         default_input = "messy.txt"
         input_file = input(f"{Fore.YELLOW}Enter path to messy log file [{default_input}]: ").strip()
@@ -405,10 +405,19 @@ class RobotChecksUI:
             input("Press Enter to continue.")
             return
 
-        default_output = "formatted_input.txt"
+        # Default output is input.txt (root of tool)
+        default_output = "input.txt"
         output_file = input(f"{Fore.YELLOW}Enter output file path [{default_output}]: ").strip()
         if not output_file:
             output_file = default_output
+
+        # If output file exists, ask for overwrite confirmation
+        if os.path.exists(output_file):
+            confirm = input(f"{Fore.YELLOW}File '{output_file}' already exists. Overwrite? (y/n): ").strip().lower()
+            if confirm != 'y':
+                print(f"{Fore.CYAN}Operation cancelled.")
+                input("Press Enter to continue.")
+                return
 
         try:
             with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
@@ -419,32 +428,42 @@ class RobotChecksUI:
             return
 
         # Parse and convert
-        identifiers = []  # store email/username lines
-        pass_lines = []   # store password lines
         email = None
         password = None
         output_lines = []
+        skip_phrases = ['source', 'compilation', 'stealer logs', 'url', '[unknown', '[not_saved]']
 
-        for line in lines:
-            line = line.strip()
+        for raw_line in lines:
+            line = raw_line.strip()
             if not line:
+                continue
+
+            # Skip lines that are clearly metadata
+            if any(phrase in line.lower() for phrase in skip_phrases):
+                continue
+
+            # If the line already contains a colon and is not prefixed, treat as already formatted
+            if ':' in line and not any(line.lower().startswith(prefix) for prefix in ['email:', 'username:', 'password:', 'url:']):
+                # But we must be careful not to capture lines like "source: something" – already skipped
+                # Check if it looks like email:pass (contains @ or no space)
+                if '@' in line or (':' in line and ' ' not in line):
+                    output_lines.append(line)
                 continue
 
             # Detect Email: or Username:
             if line.lower().startswith('email:'):
                 email = line.split(':', 1)[1].strip()
-                # If we already have a password from previous line, output and reset
-                if password is not None:
-                    if email and password and not password.startswith('[') and password != '[NOT_SAVED]':
-                        output_lines.append(f"{email}:{password}")
+                # If we have a password from previous iteration, output now (shouldn't happen, but safe)
+                if password is not None and email and password and not any(phrase in password.lower() for phrase in skip_phrases):
+                    output_lines.append(f"{email}:{password}")
                     email = None
                     password = None
                 continue
+
             if line.lower().startswith('username:'):
                 email = line.split(':', 1)[1].strip()
-                if password is not None:
-                    if email and password and not password.startswith('[') and password != '[NOT_SAVED]':
-                        output_lines.append(f"{email}:{password}")
+                if password is not None and email and password and not any(phrase in password.lower() for phrase in skip_phrases):
+                    output_lines.append(f"{email}:{password}")
                     email = None
                     password = None
                 continue
@@ -452,34 +471,32 @@ class RobotChecksUI:
             # Detect Password:
             if line.lower().startswith('password:'):
                 password = line.split(':', 1)[1].strip()
-                if email is not None:
-                    if email and password and not password.startswith('[') and password != '[NOT_SAVED]':
-                        output_lines.append(f"{email}:{password}")
+                # If we have an email waiting, output pair
+                if email is not None and password and not any(phrase in password.lower() for phrase in skip_phrases):
+                    output_lines.append(f"{email}:{password}")
                     email = None
                     password = None
                 continue
 
-            # If line already contains ':' and no prefix, pass through (already formatted)
-            if ':' in line and not line.lower().startswith('email:') and not line.lower().startswith('username:') and not line.lower().startswith('password:'):
-                # likely already in format, just add
-                output_lines.append(line)
-
-            # Otherwise, ignore (metadata lines)
-
-        # After loop, if any leftover
-        if email and password and not password.startswith('[') and password != '[NOT_SAVED]':
+        # After loop, if any remaining (should not happen)
+        if email and password and not any(phrase in password.lower() for phrase in skip_phrases):
             output_lines.append(f"{email}:{password}")
 
-        # Remove duplicates? We'll keep all, but we can optionally deduplicate if user wants.
-        # We'll keep as is.
+        # Deduplicate while preserving order (optional)
+        seen = set()
+        unique_lines = []
+        for line in output_lines:
+            if line not in seen:
+                seen.add(line)
+                unique_lines.append(line)
 
         # Write output
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
-                for line in output_lines:
+                for line in unique_lines:
                     f.write(line + '\n')
             print(f"{Fore.GREEN}Conversion complete! Output written to: {output_file}")
-            print(f"{Fore.CYAN}Total entries: {len(output_lines)}")
+            print(f"{Fore.CYAN}Total unique entries: {len(unique_lines)}")
         except Exception as e:
             print(f"{Fore.RED}Error writing output file: {e}")
 
