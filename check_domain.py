@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 import requests
 import time
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup  # you may need: pip install beautifulsoup4
 
-# Your exact list (name: login_url)
 SITES = {
     "PCOptimum": "https://www.pcoptimum.ca/login",
     "Pepper": "https://www.pepper.com/login",
@@ -203,11 +203,68 @@ SITES = {
     "Streetbees": "https://www.streetbees.com/login"
 }
 
+# Common login paths to try
+LOGIN_PATHS = [
+    "/login",
+    "/signin",
+    "/logon",
+    "/auth",
+    "/account/login",
+    "/users/sign_in",
+    "/session/new",
+    "/customer/login",
+    "/user/login",
+    "/member/login",
+    "/en/login",
+    "/auth/login",
+    "/login.php",
+    "/signin.php"
+]
+
+# Keywords in link text to look for on the homepage
+LOGIN_LINK_TEXTS = ["login", "sign in", "log in", "signin", "account", "my account"]
+
+def find_login_url(base_url):
+    """
+    Try to find the login page for a given base URL.
+    Returns (found_url, source) or (None, None)
+    """
+    # Try common paths first
+    for path in LOGIN_PATHS:
+        url = urljoin(base_url, path)
+        try:
+            r = requests.get(url, timeout=10, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code == 200:
+                # Check if it's a real page (not a 404 error page)
+                if "404" not in r.text.lower() and "not found" not in r.text.lower():
+                    return url, "path"
+        except:
+            continue
+
+    # If no path works, try to scrape homepage for login link
+    try:
+        r = requests.get(base_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, 'html.parser')
+            # Find links with text containing login keywords
+            for a in soup.find_all('a', href=True):
+                text = a.get_text(strip=True).lower()
+                for keyword in LOGIN_LINK_TEXTS:
+                    if keyword in text:
+                        href = a['href']
+                        if href.startswith('http'):
+                            return href, "scrape"
+                        else:
+                            return urljoin(base_url, href), "scrape"
+    except:
+        pass
+
+    return None, None
+
 def has_captcha(url):
     try:
         r = requests.get(url, timeout=15, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
         html = r.text.lower()
-        # Check for reCAPTCHA / hCaptcha
         patterns = [
             "g-recaptcha",
             "recaptcha",
@@ -228,36 +285,59 @@ def has_captcha(url):
 no_captcha = []
 with_captcha = []
 error = []
+discovered_urls = {}
 
-print("Scanning login pages...\n")
-for name, url in SITES.items():
-    print(f"Checking {name}...", end="")
-    result = has_captcha(url)
-    if result is None:
+print("Discovering login pages and checking captcha...\n")
+for name, provided_url in SITES.items():
+    print(f"Processing {name}...", end="")
+    base_domain = urlparse(provided_url).netloc
+    base_url = f"https://{base_domain}" if not base_domain.startswith('http') else provided_url.split('/login')[0]
+    # Actually, use the provided URL as base (remove /login if present)
+    if provided_url.endswith('/login'):
+        base_url = provided_url[:-6]  # remove trailing /login
+    else:
+        base_url = provided_url
+
+    login_url, source = find_login_url(base_url)
+    if login_url is None:
+        print(" ERROR (no login page found)")
+        error.append((name, provided_url))
+        continue
+
+    discovered_urls[name] = login_url
+    print(f" found {login_url} ({source})", end="")
+    captcha = has_captcha(login_url)
+    if captcha is None:
         print(" ERROR (unreachable)")
-        error.append(name)
-    elif result:
+        error.append((name, provided_url))
+    elif captcha:
         print(" CAPTCHA")
-        with_captcha.append(name)
+        with_captcha.append((name, login_url))
     else:
         print(" NO CAPTCHA")
-        no_captcha.append(name)
+        no_captcha.append((name, login_url))
     time.sleep(0.5)
 
 # Save results
-with open("no_captcha_list.txt", "w") as f:
-    for name in no_captcha:
-        f.write(f"{name}: {SITES[name]}\n")
+with open("discovered_login_urls.txt", "w") as f:
+    for name, url in discovered_urls.items():
+        f.write(f"{name}: {url}\n")
 
-with open("with_captcha_list.txt", "w") as f:
-    for name in with_captcha:
-        f.write(f"{name}: {SITES[name]}\n")
+with open("no_captcha_discovered.txt", "w") as f:
+    for name, url in no_captcha:
+        f.write(f"{name}: {url}\n")
 
-with open("error_list.txt", "w") as f:
-    for name in error:
-        f.write(f"{name}: {SITES[name]}\n")
+with open("with_captcha_discovered.txt", "w") as f:
+    for name, url in with_captcha:
+        f.write(f"{name}: {url}\n")
+
+with open("error_discovered.txt", "w") as f:
+    for name, url in error:
+        f.write(f"{name}: {url}\n")
 
 print(f"\n✅ Done.")
-print(f"   NO CAPTCHA: {len(no_captcha)} → no_captcha_list.txt")
-print(f"   WITH CAPTCHA: {len(with_captcha)} → with_captcha_list.txt")
-print(f"   ERROR: {len(error)} → error_list.txt")
+print(f"   Discovered login pages for {len(discovered_urls)} sites → saved to discovered_login_urls.txt")
+print(f"   NO CAPTCHA: {len(no_captcha)} → no_captcha_discovered.txt")
+print(f"   WITH CAPTCHA: {len(with_captcha)} → with_captcha_discovered.txt")
+print(f"   ERROR: {len(error)} → error_discovered.txt")
+print("\n⚠️  Manually verify the 'no_captcha_discovered.txt' list – some pages may load captcha via JavaScript.")
