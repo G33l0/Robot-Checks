@@ -1,376 +1,599 @@
+#!/usr/bin/env python3
 import requests
+import time
+from urllib.parse import urlparse
 
-def test_login_page(url):
-    try:
-        r = requests.get(url, timeout=10, allow_redirects=True)
-        html = r.text.lower()
-        if "g-recaptcha" in html or "recaptcha" in html:
-            return "CAPTCHA"
-        else:
-            return "NO CAPTCHA"
-    except Exception as e:
-        return f"ERROR: {str(e)[:50]}"
+# List of domains from your message
+domains = """
+juno.com
+netzero.net
+verizon.net
+frontier.com
+frontiernet.net
+windstream.net
+centurylink.net
+embarqmail.com
+q.com
+sbcglobal.net
+pacbell.net
+ameritech.net
+prodigy.net
+flash.net
+swbell.net
+mindspring.com
+peoplepc.com
+optonline.net
+rcn.com
+wowway.com
+cableone.net
+suddenlink.net
+mediacombb.net
+epbfi.com
+gci.net
+hawaiiantel.net
+telus.com
+mts.net
+eastlink.ca
+execulink.com
+primus.ca
+start.ca
+teksavvy.com
+runbox.no
+email.it
+inwind.it
+tin.it
+iol.it
+lycos.com
+lycos.co.uk
+hush.ai
+mailbox.com
+usa.net
+mykolab.com
+posteo.net
+ecloud.global
+mailhostbox.com
+mxlogin.com
+mailproxsy.com
+ukr.net
+meta.ua
+i.ua
+bigmir.net
+tut.by
+onet.eu
+eclipso.eu
+mail.be
+skynet.be
+voo.be
+telenet.be
+ziggo.nl
+xs4all.nl
+kpnmail.nl
+planet.nl
+chello.nl
+upcmail.nl
+telia.com
+telia.se
+bredband.net
+bahnhof.se
+tele2.se
+online.no
+tiscali.it
+tiscali.co.uk
+virginmedia.com
+btinternet.com
+bt.com
+talktalk.net
+sky.com
+plus.net
+ee.co.uk
+vodafone.co.uk
+eir.ie
+eircom.net
+telus.net
+shaw.ca
+rogers.com
+bell.net
+sympatico.ca
+videotron.ca
+cox.net
+comcast.net
+xfinity.com
+charter.net
+spectrum.net
+att.net
+bellsouth.net
+earthlink.net
+libero.it
+virgilio.it
+alice.it
+laposte.net
+orange.fr
+free.fr
+sfr.fr
+wanadoo.fr
+gmx.net
+gmx.at
+gmx.ch
+bluewin.ch
+swissonline.ch
+protonmail.com
+icloud.com
+me.com
+mac.com
+gmail.com
+outlook.com
+hotmail.com
+live.com
+msn.com
+yahoo.com
+ymail.com
+rocketmail.com
+aol.com
+aim.com
+fastmail.fm
+hey.com
+duck.com
+startmail.nl
+mail.ee
+inbox.lv
+mail.bg
+abv.bg
+o2.pl
+wp.pl
+interia.pl
+onet.pl
+centrum.cz
+atlas.cz
+azet.sk
+centrum.sk
+zoznam.sk
+mail.kz
+bk.ru
+list.ru
+inbox.ru
+rambler.ru
+heartinternet.uk
+clouvider.com
+exabytes.com
+shinjiru.com
+hostarmada.com
+chemicloud.com
+knownhost.com
+rosehosting.com
+scalahosting.com
+verpex.com
+cloudways.com
+wpengine.com
+kinsta.com
+flywheelwp.com
+pantheon.io
+acquia.com
+platform.sh
+render.com
+railway.app
+fly.io
+vercel.com
+netlify.com
+heroku.com
+oracle.com
+ibm.com
+alibabacloud.com
+tencentcloud.com
+huaweicloud.com
+yandex.com
+mail.ru
+naver.com
+daum.net
+qq.com
+163.com
+126.com
+yeah.net
+aliyun.com
+exmail.qq.com
+worksmobile.com
+larksuite.com
+feishu.cn
+uol.com.br
+bol.com.br
+terra.com.br
+rediffmail.com
+mail.com
+gmx.com
+web.de
+seznam.cz
+t-online.de
+maildrop.cc
+burnermail.io
+spamgourmet.com
+33mail.com
+anonaddy.com
+firetrust.com
+mailfence.com
+ctemplar.com
+hushmail.com
+countermail.com
+vfemail.net
+luxsci.com
+atmail.com
+kerio.com
+zimbra.com
+icewarp.com
+open-xchange.com
+mailenable.com
+smartertools.com
+axigen.com
+communigate.com
+mdaemon.com
+afterlogic.com
+crossbox.io
+roundcube.net
+sogo.nu
+citadel.org
+wildduck.email
+stalwartlabs.com
+mailu.io
+wildbit.com
+postalhq.com
+mailzy.ai
+mailazy.net
+turbo-smtp.org
+mailrelay.com
+dinahosting.com
+arsys.es
+transip.nl
+infomaniak.com
+hostpoint.ch
+one.com
+simply.com
+loopia.se
+blacknight.com
+register365.com
+ukfast.co.uk
+krystal.uk
+20i.com
+fasthosts.co.uk
+spamhaus.org
+spamcop.net
+surbl.org
+uribl.com
+dnswl.org
+abusix.com
+invaluement.com
+proofpoint.com
+mimecast.com
+barracuda.com
+fortinet.com
+sophos.com
+trendmicro.com
+checkpoint.com
+broadcom.com
+cisco.com
+cloudmark.com
+vipre.com
+vircom.com
+hornetsecurity.com
+trustifi.com
+easydmarc.com
+senderscore.org
+talosintelligence.com
+multirbl.valli.org
+dnschecker.org
+mailgenius.com
+mailtester.ninja
+mailforge.ai
+maildoso.com
+mailflow.com
+suped.com
+mailop.org
+emaillove.com
+senderscore.com
+mailosaur.com
+mailinator.com
+ethereal.email
+mailnesia.com
+guerrillamail.com
+temp-mail.org
+10minutemail.com
+tempmail.plus
+tempail.com
+yopmail.com
+dispostable.com
+dropmail.me
+inboxes.com
+mailcatch.app
+fakeinbox.com
+dynadot.com
+gandi.net
+joker.com
+hexonet.net
+internetbs.net
+name.com
+networksolutions.com
+register.com
+iwantmyname.com
+easydns.com
+ovhcloud.com
+scaleway.com
+contabo.com
+vultr.com
+digitalocean.com
+linode.com
+hetzner.com
+exoscale.com
+upcloud.com
+leaseweb.com
+kamatera.com
+hostwinds.com
+greenarrowemail.com
+mailchannels.com
+cloudmailin.com
+mailazy.com
+maileroo.com
+sweego.io
+emailapi.com
+postalserver.io
+emailengine.app
+mailcow.email
+mailinabox.email
+modoboa.org
+iredmail.org
+docker-mailserver.github.io
+stalw.art
+haraka.github.io
+postfix.org
+dovecot.org
+exim.org
+rspamd.com
+opendkim.org
+openarc.org
+apache.org
+policyd.org
+scrolloutf1.com
+iredadmin.org
+mailcleaner.org
+proxmox.com
+ondmarc.redsift.com
+uriports.com
+mailhardener.com
+glockapps.com
+mail-tester.com
+warmupinbox.com
+folderly.com
+mailreach.co
+lemwarm.com
+trulyinbox.com
+inboxally.com
+mailwarm.com
+forwardemail.net
+improvmx.com
+simplelogin.io
+addy.io
+migadu.com
+fastmail.com
+proton.me
+tutanota.com
+posteo.de
+startmail.com
+mailbox.org
+runbox.com
+kolabnow.com
+purelymail.com
+mxroute.com
+zoho.com
+googleworkspace.google.com
+workspace.microsoft.com
+rackspace.com
+namecheap.com
+opensrs.com
+openprovider.com
+cloudflare.com
+hostinger.com
+ionos.com
+dreamhost.com
+siteground.com
+bluehost.com
+inmotionhosting.com
+a2hosting.com
+liquidweb.com
+interserver.net
+web.com
+godaddy.com
+pair.com
+hover.com
+porkbun.com
+dynu.com
+acoustic.com
+maropost.com
+e-goi.com
+cleverreach.com
+mailup.com
+vision6.com
+cm.com
+bloomreach.com
+freshworks.com
+keap.com
+ontraport.com
+user.com
+sendfox.com
+selzy.com
+mailshake.com
+reply.io
+saleshandy.com
+instantly.ai
+smartlead.ai
+quickmail.com
+lemlist.com
+woodpecker.co
+gmass.co
+mailmeteor.com
+yesware.com
+mixmax.com
+outreach.io
+salesloft.com
+close.com
+persistiq.com
+apollo.io
+snov.io
+hunter.io
+zerobounce.net
+neverbounce.com
+kickbox.com
+verifalia.com
+debounce.io
+clearout.io
+emailable.com
+proofy.io
+mailboxvalidator.com
+millionverifier.com
+bouncer.bounce.email
+abstractapi.com
+mailcheck.ai
+mxtoolbox.com
+dmarcian.com
+valimail.com
+powerdmarc.com
+sendgrid.com
+mailgun.com
+resend.com
+postmarkapp.com
+mailersend.com
+smtp2go.com
+smtp.com
+mailjet.com
+brevo.com
+elasticemail.com
+sparkpost.com
+zeptomail.com
+courier.com
+loops.so
+customer.io
+emailoctopus.com
+socketlabs.com
+pepipost.com
+sendpulse.com
+emaillabs.io
+serversmtp.com
+mailpace.com
+mail.baby
+unione.io
+useplunk.com
+mailtrap.io
+sendy.co
+emailjs.com
+netcorecloud.com
+moosend.com
+campaignmonitor.com
+aweber.com
+constantcontact.com
+activecampaign.com
+getresponse.com
+kit.com
+omnisend.com
+drip.com
+sender.net
+bird.com
+mailerlite.com
+benchmarkemail.com
+sendx.io
+mailmodo.com
+engagebay.com
+ortto.com
+iterable.com
+braze.com
+blueshift.com
+dotdigital.com
+""".strip().splitlines()
 
-services = {
-    "Rakuten": "https://www.rakuten.com/account/login",
-    "Capital One Shopping": "https://www.capitaloneshopping.com/login",
-    "RetailMeNot": "https://www.retailmenot.com/account/login",
-    "JoinHoney": "https://www.joinhoney.com/login",
-    "Ibotta": "https://home.ibotta.com/login",
-    "Fetch": "https://www.fetch.com/login",
-    "Upside": "https://www.upside.com/login",
-    "Dosh": "https://www.dosh.com/login",
-    "Shopkick": "https://www.shopkick.com/login",
-    "Swagbucks": "https://www.swagbucks.com/account/login",
-    "InboxDollars": "https://www.inboxdollars.com/account/login",
-    "Befrugal": "https://www.befrugal.com/login",
-    "ReceiptHog": "https://www.receipthog.com/login",
-    "Checkout51": "https://www.checkout51.com/login",
-    "Quidco": "https://www.quidco.com/login",
-    "AirTimeRewards": "https://www.airtimerewards.com/login",
-    "Cheddar": "https://www.cheddar.me/login",
-    "Widilo": "https://www.widilo.fr/login",
-    "iGraal": "https://www.igraal.com/login",
-    "Cashrewards": "https://www.cashrewards.com.au/login",
-    "ShopBack": "https://www.shopback.com/login",
-    "Picodi": "https://www.picodi.com/login",
-    "Coupert": "https://www.coupert.com/login",
-    "KarmaNow": "https://www.karmanow.com/login",
-    "DealSpotr": "https://www.dealspotr.com/login",
-    "RebatesMe": "https://www.rebatesme.com/login",
-    "MrRebates": "https://www.mrrebates.com/login",
-    "GivingAssistant": "https://www.givingassistant.org/login",
-    "Fluz": "https://www.fluz.app/login",
-    "CardCash": "https://www.cardcash.com/login",
-    "Perksy": "https://www.perksy.com/login",
-    "BingRewards": "https://www.bing.com/rewards/login",
-    "GoogleOpinionRewards": "https://surveys.google.com/rewards/login",
-    "AmazonShopperPanel": "https://www.amazon.com/shopperpanel/login",
-    "Tangocard": "https://www.tangocard.com/login",
-    "Tremendous": "https://www.tremendous.com/login",
-    "BlackhawkNetwork": "https://www.blackhawknetwork.com/login",
-    "Runa": "https://www.runa.io/login",
-    "Giftbit": "https://www.giftbit.com/login",
-    "BHNRewards": "https://www.bhnrewards.com/login",
-    "RewardGateway": "https://www.rewardgateway.com/login",
-    "Xoxoday": "https://www.xoxoday.com/login",
-    "Awardco": "https://www.awardco.com/login",
-    "Smile.io": "https://www.smile.io/login",
-    "LoyaltyLion": "https://www.loyaltylion.com/login",
-    "Yotpo": "https://www.yotpo.com/login",
-    "Zinrelo": "https://www.zinrelo.com/login",
-    "AnnexCloud": "https://www.annexcloud.com/login",
-    "Talon.One": "https://www.talon.one/login",
-    "Extrabux": "https://www.extrabux.com/login",
-    "MaxRebates": "https://www.maxrebates.com/login",
-    "CashbackMonitor": "https://www.cashbackmonitor.com/login",
-    "SimplyBestCoupons": "https://www.simplybestcoupons.com/login",
-    "CouponCabin": "https://www.couponcabin.com/login",
-    "CouponFollow": "https://www.couponfollow.com/login",
-    "Slickdeals": "https://slickdeals.net/login",
-    "Offers.com": "https://www.offers.com/login",
-    "PromoCodes.com": "https://www.promocodes.com/login",
-    "CouponBirds": "https://www.couponbirds.com/login",
-    "CouponCause": "https://www.couponcause.com/login",
-    "CouponChief": "https://www.couponchief.com/login",
-    "CouponMom": "https://www.couponmom.com/login",
-    "CouponXoo": "https://www.couponxoo.com/login",
-    "RewardAny": "https://www.rewardany.com/login",
-    "PointsPay": "https://www.pointspay.com/login",
-    "AirMiles": "https://www.airmiles.ca/login",
-    "ScenePlus": "https://www.sceneplus.ca/login",
-    "PCOptimum": "https://www.pcoptimum.ca/login",
-    "Drop": "https://www.drop.com/login",
-    "Pepper": "https://www.pepper.com/login",
-    "Shopfully": "https://www.shopfully.com/login",
-    "Stocard": "https://www.stocardapp.com/login",
-    "Fidme": "https://www.fidme.com/login",
-    "Piggy": "https://www.piggy.eu/login",
-    "SparkLoyalty": "https://www.sparkloyalty.com/login",
-    "SessionM": "https://www.sessionm.com/login",
-    "Paytronix": "https://www.paytronix.com/login",
-    "Thanx": "https://www.thanx.com/login",
-    "BellyCard": "https://www.bellycard.com/login",
-    "Fivestars": "https://www.fivestars.com/login",
-    "KickbackRewards": "https://www.kickbackrewards.com/login",
-    "FuelRewards": "https://www.fuelrewards.com/login",
-    "Plenti": "https://www.plenti.com/login",
-    "FetchRewards": "https://www.fetchrewards.com/login",
-    "ReceiptJar": "https://www.receiptjar.com/login",
-    "ZipZero": "https://www.zipzero.com/login",
-    "GreenJinn": "https://www.greenjinn.com/login",
-    "Snipsnap": "https://www.snipsnap.it/login",
-    "Cardlytics": "https://www.cardlytics.com/login",
-    "Figg": "https://www.figg.com/login",
-    "Bumped": "https://www.bumped.com/login",
-    "Mojorewards": "https://www.mojorewards.com/login",
-    "RewardStock": "https://www.rewardstock.com/login",
-    "Point.Me": "https://www.point.me/login",
-    "TravelFreely": "https://www.travelfreely.com/login",
-    "EvReward": "https://www.evreward.com/login",
-    "DoshRewards": "https://www.doshrewards.com/login",
-    "Giftogram": "https://www.giftogram.com/login",
-    "Giftly": "https://www.giftly.com/login",
-    "Gyft": "https://www.gyft.com/login",
-    "Raise": "https://www.raise.com/login",
-    "Prezzee": "https://www.prezzee.com/login",
-    "GiftRocket": "https://www.giftrocket.com/login",
-    "Egifter": "https://www.egifter.com/login",
-    "PerfectGift": "https://www.perfectgift.com/login",
-    "GiftofChoice": "https://www.giftofchoice.com/login",
-    "GiftCards.com": "https://www.giftcards.com/login",
-    "Cardbear": "https://www.cardbear.com/login",
-    "Cardpool": "https://www.cardpool.com/login",
-    "Cardcookie": "https://www.cardcookie.com/login",
-    "GCXRaise": "https://www.gcxraise.com/login",
-    "Cardflip": "https://www.cardflip.com/login",
-    "Tillo": "https://www.tillo.io/login",
-    "Wegift": "https://www.wegift.io/login",
-    "Buyatab": "https://www.buyatab.com/login",
-    "Giftango": "https://www.giftango.com/login",
-    "Giftee": "https://www.giftee.com/login",
-    "GiftMall": "https://www.giftmall.co.jp/login",
-    "Giftnpay": "https://www.giftnpay.com/login",
-    "Giftbit.net": "https://www.giftbit.net/login",
-    "GiftCards.ca": "https://www.giftcards.ca/login",
-    "YourRewardCard": "https://www.yourrewardcard.com/login",
-    "VirtualRewardCenter": "https://www.virtualrewardcenter.com/login",
-    "MyGiftCardsPlus": "https://www.mygiftcardsplus.com/login",
-    "RapidRewardsShopping": "https://www.rapidrewardsshopping.com/login",
-    "AAadvantageEShopping": "https://www.aadvantageeshopping.com/login",
-    "MileagePlusShopping": "https://www.mileageplusshopping.com/login",
-    "SkymilesShopping": "https://www.skymilesshopping.com/login",
-    "BritishAirwaysEShopping": "https://www.britishairwayseshopping.com/login",
-    "Avios": "https://www.avios.com/login",
-    "Nectar": "https://www.nectar.com/login",
-    "Nectar360": "https://www.nectar360.co.uk/login",
-    "Flybuys": "https://www.flybuys.com.au/login",
-    "EverydayRewards": "https://www.everydayrewards.com.au/login",
-    "VelocityFrequentFlyer": "https://www.velocityfrequentflyer.com/login",
-    "Qantas": "https://www.qantas.com/login",
-    "AsiaRewards": "https://www.asiarewards.com/login",
-    "KrisPlus": "https://www.krisplus.com/login",
-    "KrisFlyer": "https://www.krisflyer.com/login",
-    "AirAsiaRewards": "https://www.airasiarewards.com/login",
-    "GoRewards": "https://www.gorewards.com/login",
-    "Pampers": "https://www.pampers.com/login",
-    "Coca-Cola": "https://www.coca-cola.com/login",
-    "Pepsi": "https://www.pepsi.com/login",
-    "KeurigDrPepper": "https://www.keurigdrpepper.com/login",
-    "Keurig": "https://www.keurig.com/login",
-    "MyCokeRewards": "https://www.mycokerewards.com/login",
-    "Nike": "https://www.nike.com/login",
-    "Adidas": "https://www.adidas.com/login",
-    "Starbucks": "https://www.starbucks.com/login",
-    "McDonalds": "https://www.mcdonalds.com/login",
-    "BurgerKing": "https://www.burgerking.com/login",
-    "Subway": "https://www.subway.com/login",
-    "Chipotle": "https://www.chipotle.com/login",
-    "DunkinDonuts": "https://www.dunkindonuts.com/login",
-    "PaneraBread": "https://www.panerabread.com/login",
-    "Dominos": "https://www.dominos.com/login",
-    "PizzaHut": "https://www.pizzahut.com/login",
-    "Walgreens": "https://www.walgreens.com/login",
-    "CVS": "https://www.cvs.com/login",
-    "Target": "https://www.target.com/login",
-    "Walmart": "https://www.walmart.com/login",
-    "Costco": "https://www.costco.com/login",
-    "SamsClub": "https://www.samsclub.com/login",
-    "BestBuy": "https://www.bestbuy.com/login",
-    "Macys": "https://www.macys.com/login",
-    "Kohls": "https://www.kohls.com/login",
-    "JCPenney": "https://www.jcpenney.com/login",
-    "Nordstrom": "https://www.nordstrom.com/login",
-    "NeimanMarcus": "https://www.neimanmarcus.com/login",
-    "Bloomingdales": "https://www.bloomingdales.com/login",
-    "Sephora": "https://www.sephora.com/login",
-    "Ulta": "https://www.ulta.com/login",
-    "Gap": "https://www.gap.com/login",
-    "OldNavy": "https://www.oldnavy.com/login",
-    "BananaRepublic": "https://www.bananarepublic.com/login",
-    "Athleta": "https://www.athleta.com/login",
-    "REI": "https://www.rei.com/login",
-    "Cabelas": "https://www.cabelas.com/login",
-    "BassPro": "https://www.basspro.com/login",
-    "Academy": "https://www.academy.com/login",
-    "DicksSportingGoods": "https://www.dickssportinggoods.com/login",
-    "Zappos": "https://www.zappos.com/login",
-    "Ebay": "https://www.ebay.com/login",
-    "Etsy": "https://www.etsy.com/login",
-    "Aliexpress": "https://www.aliexpress.com/login",
-    "Temu": "https://www.temu.com/login",
-    "Shein": "https://www.shein.com/login",
-    "Wish": "https://www.wish.com/login",
-    "Amazon": "https://www.amazon.com/login",
-    "WalmartPlus": "https://www.walmartplus.com/login",
-    "Instacart": "https://www.instacart.com/login",
-    "UberEats": "https://www.ubereats.com/login",
-    "Doordash": "https://www.doordash.com/login",
-    "Grubhub": "https://www.grubhub.com/login",
-    "Postmates": "https://www.postmates.com/login",
-    "Lyft": "https://www.lyft.com/login",
-    "Uber": "https://www.uber.com/login",
-    "Expedia": "https://www.expedia.com/login",
-    "Booking": "https://www.booking.com/login",
-    "Hotels.com": "https://www.hotels.com/login",
-    "Priceline": "https://www.priceline.com/login",
-    "Travelocity": "https://www.travelocity.com/login",
-    "Orbitz": "https://www.orbitz.com/login",
-    "Agoda": "https://www.agoda.com/login",
-    "Trip.com": "https://www.trip.com/login",
-    "VRBO": "https://www.vrbo.com/login",
-    "Airbnb": "https://www.airbnb.com/login",
-    "Viator": "https://www.viator.com/login",
-    "GetYourGuide": "https://www.getyourguide.com/login",
-    "Klook": "https://www.klook.com/login",
-    "Tripadvisor": "https://www.tripadvisor.com/login",
-    "OpenRice": "https://www.openrice.com/login",
-    "Opentable": "https://www.opentable.com/login",
-    "Resy": "https://www.resy.com/login",
-    "Tock": "https://www.tock.com/login",
-    "PayPal": "https://www.paypal.com/login",
-    "Venmo": "https://venmo.com/login",
-    "CashApp": "https://cash.app/login",
-    "Revolut": "https://www.revolut.com/login",
-    "Wise": "https://www.wise.com/login",
-    "Chime": "https://www.chime.com/login",
-    "Discover": "https://www.discover.com/login",
-    "AmericanExpress": "https://www.americanexpress.com/login",
-    "Mastercard": "https://www.mastercard.com/login",
-    "Visa": "https://www.visa.com/login",
-    "Stripe": "https://www.stripe.com/login",
-    "Klarna": "https://www.klarna.com/login",
-    "Afterpay": "https://www.afterpay.com/login",
-    "Affirm": "https://www.affirm.com/login",
-    "Zip": "https://www.zip.co/login",
-    "Splitit": "https://www.splitit.com/login",
-    "PayPalShopping": "https://www.paypal-shopping.com/login",
-    "Shop.app": "https://shop.app/login",
-    "Google": "https://accounts.google.com/login",
-    "Apple": "https://appleid.apple.com/login",
-    "Samsung": "https://account.samsung.com/login",
-    "Microsoft": "https://login.microsoftonline.com/login",
-    "Lenovo": "https://www.lenovo.com/login",
-    "Dell": "https://www.dell.com/login",
-    "HP": "https://www.hp.com/login",
-    "Acer": "https://www.acer.com/login",
-    "Asus": "https://www.asus.com/login",
-    "Intel": "https://www.intel.com/login",
-    "AMD": "https://www.amd.com/login",
-    "Nvidia": "https://www.nvidia.com/login",
-    "Sony": "https://www.sony.com/login",
-    "PlayStation": "https://www.playstation.com/login",
-    "Xbox": "https://www.xbox.com/login",
-    "Nintendo": "https://www.nintendo.com/login",
-    "Steam": "https://steamcommunity.com/login",
-    "EpicGames": "https://www.epicgames.com/login",
-    "GOG": "https://www.gog.com/login",
-    "HumbleBundle": "https://www.humblebundle.com/login",
-    "Fanatical": "https://www.fanatical.com/login",
-    "GreenManGaming": "https://www.greenmangaming.com/login",
-    "CDKeys": "https://www.cdkeys.com/login",
-    "Newegg": "https://www.newegg.com/login",
-    "MicroCenter": "https://www.microcenter.com/login",
-    "B&HPhoto": "https://www.bhphotovideo.com/login",
-    "Adorama": "https://www.adorama.com/login",
-    "Staples": "https://www.staples.com/login",
-    "OfficeDepot": "https://www.officedepot.com/login",
-    "Office.com": "https://www.office.com/login",
-    "Lowe's": "https://www.lowes.com/login",
-    "HomeDepot": "https://www.homedepot.com/login",
-    "IKEA": "https://www.ikea.com/login",
-    "Wayfair": "https://www.wayfair.com/login",
-    "Overstock": "https://www.overstock.com/login",
-    "Chewy": "https://www.chewy.com/login",
-    "Petco": "https://www.petco.com/login",
-    "PetSmart": "https://www.petsmart.com/login",
-    "1-800-Flowers": "https://www.1-800-flowers.com/login",
-    "ProFlowers": "https://www.proflowers.com/login",
-    "EdibleArrangements": "https://www.ediblearrangements.com/login",
-    "FTD": "https://www.ftd.com/login",
-    "Teleflora": "https://www.teleflora.com/login",
-    "Hallmark": "https://www.hallmark.com/login",
-    "Moonpig": "https://www.moonpig.com/login",
-    "FunkyPigeon": "https://www.funkypigeon.com/login",
-    "Vistaprint": "https://www.vistaprint.com/login",
-    "Shutterfly": "https://www.shutterfly.com/login",
-    "Snapfish": "https://www.snapfish.com/login",
-    "Canva": "https://www.canva.com/login",
-    "Printful": "https://www.printful.com/login",
-    "Printify": "https://www.printify.com/login",
-    "Redbubble": "https://www.redbubble.com/login",
-    "TeePublic": "https://www.teepublic.com/login",
-    "Society6": "https://www.society6.com/login",
-    "Zazzle": "https://www.zazzle.com/login",
-    "CafePress": "https://www.cafepress.com/login",
-    "Spring": "https://www.spring.com/login",
-    "Spreadshirt": "https://www.spreadshirt.com/login",
-    "FineArtAmerica": "https://www.fineartamerica.com/login",
-    "Minted": "https://www.minted.com/login",
-    "NotOnTheHighStreet": "https://www.notonthehighstreet.com/login",
-    "Groupon": "https://www.groupon.com/login",
-    "LivingSocial": "https://www.livingsocial.com/login",
-    "Wowcher": "https://www.wowcher.co.uk/login",
-    "SocialNature": "https://www.socialnature.com/login",
-    "Influenster": "https://www.influenster.com/login",
-    "BzzAgent": "https://www.bzzagent.com/login",
-    "Homeester": "https://www.homeester.com/login",
-    "Smiley360": "https://www.smiley360.com/login",
-    "Crowdtap": "https://www.crowdtap.com/login",
-    "Pinecone": "https://www.pinecone.com/login",
-    "BrandedSurveys": "https://www.brandedsurveys.com/login",
-    "LifePointsPanel": "https://www.lifepointspanel.com/login",
-    "YouGov": "https://www.yougov.com/login",
-    "Toluna": "https://www.toluna.com/login",
-    "IpsosiSay": "https://www.ipsosisay.com/login",
-    "OpinionOutpost": "https://www.opinionoutpost.com/login",
-    "ValuedOpinions": "https://www.valuedopinions.com/login",
-    "SurveyJunkie": "https://www.surveyjunkie.com/login",
-    "Attapoll": "https://www.attapoll.com/login",
-    "OnePoll": "https://www.onepoll.com/login",
-    "Prolific": "https://www.prolific.com/login",
-    "Respondent": "https://www.respondent.io/login",
-    "UserInterviews": "https://www.userinterviews.com/login",
-    "Intellizoom": "https://www.intellizoom.com/login",
-    "UserTesting": "https://www.usertesting.com/login",
-    "TryMata": "https://www.trymata.com/login",
-    "Ferpection": "https://www.ferpection.com/login",
-    "PlaytestCloud": "https://www.playtestcloud.com/login",
-    "Betabound": "https://www.betabound.com/login",
-    "BetaFamily": "https://www.betafamily.com/login",
-    "Testbirds": "https://www.testbirds.com/login",
-    "Applause": "https://www.applause.com/login",
-    "UTest": "https://www.utest.com/login",
-    "TesterWork": "https://www.testerwork.com/login",
-    "Validately": "https://www.validately.com/login",
-    "ConversionCrimes": "https://www.conversioncrimes.com/login",
-    "EnrollApp": "https://www.enrollapp.com/login",
-    "TestingTime": "https://www.testingtime.com/login",
-    "Checkealos": "https://www.checkealos.com/login",
-    "Clickworker": "https://www.clickworker.com/login",
-    "Appen": "https://www.appen.com/login",
-    "TelusInternational": "https://www.telusinternational.ai/login",
-    "Remotasks": "https://www.remotasks.com/login",
-    "AmazonMechanicalTurk": "https://www.amazonmechanicalturk.com/login",
-    "FieldAgent": "https://www.fieldagent.net/login",
-    "Mobee": "https://www.mobee.com/login",
-    "Gigwalk": "https://www.gigwalk.com/login",
-    "EasyShift": "https://www.easyshiftapp.com/login",
-    "Observa": "https://www.observa.com/login",
-    "Premise": "https://www.premise.com/login",
-    "Streetbees": "https://www.streetbees.com/login"
-}
+# Clean and deduplicate
+domains = list(set([d.strip() for d in domains if d.strip()]))
+
+# Possible login paths to try (in order of likelihood)
+LOGIN_PATHS = [
+    "/login",
+    "/signin",
+    "/auth",
+    "/account/login",
+    "/en/login",
+    "/logon",
+    "/user/login",
+    "/member/login",
+]
+
+def test_login_page(base_url):
+    """
+    Try multiple login paths until one returns a successful page (status 200)
+    then check for captcha.
+    """
+    for path in LOGIN_PATHS:
+        try:
+            url = base_url.rstrip('/') + path
+            r = requests.get(url, timeout=10, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code == 200:
+                html = r.text.lower()
+                # Check for reCAPTCHA indicators
+                if "g-recaptcha" in html or "recaptcha" in html:
+                    return "CAPTCHA"
+                else:
+                    return "NO CAPTCHA"
+        except Exception:
+            continue
+    return "UNKNOWN (no login page found)"
+
+def get_base_url(domain):
+    # Try common protocols and subdomains
+    candidates = [
+        f"https://www.{domain}",
+        f"https://{domain}",
+        f"https://login.{domain}",
+        f"https://account.{domain}",
+        f"https://my.{domain}",
+    ]
+    for url in candidates:
+        try:
+            # Quick HEAD or GET to see if it responds
+            r = requests.get(url, timeout=5, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code < 500:
+                return url
+        except:
+            continue
+    return None
 
 no_captcha = []
-for name, url in services.items():
-    result = test_login_page(url)
-    print(f"{name}: {result}")
+with_captcha = []
+unknown = []
+
+print(f"Checking {len(domains)} domains...\n")
+for i, domain in enumerate(domains, 1):
+    print(f"[{i}/{len(domains)}] Checking {domain}...", end="", flush=True)
+    base_url = get_base_url(domain)
+    if base_url is None:
+        print(" UNKNOWN (site unreachable)")
+        unknown.append(domain)
+        continue
+    result = test_login_page(base_url)
+    print(f" {result}")
     if result == "NO CAPTCHA":
-        no_captcha.append(f"{name}: {url}")
+        no_captcha.append(domain)
+    elif result == "CAPTCHA":
+        with_captcha.append(domain)
+    else:
+        unknown.append(domain)
+    time.sleep(0.5)  # Be gentle
 
-# Save only NO CAPTCHA entries
-with open("no_captcha.txt", "w") as f:
-    for line in no_captcha:
-        f.write(line + "\n")
+# Save results
+with open("no_captcha_email_services.txt", "w") as f:
+    for d in no_captcha:
+        f.write(d + "\n")
 
-print(f"\n✅ Found {len(no_captcha)} services with NO captcha. Saved to no_captcha.txt")
+with open("with_captcha_email_services.txt", "w") as f:
+    for d in with_captcha:
+        f.write(d + "\n")
+
+with open("unknown_email_services.txt", "w") as f:
+    for d in unknown:
+        f.write(d + "\n")
+
+print(f"\n✅ Done.")
+print(f"   NO CAPTCHA: {len(no_captcha)} services → saved to no_captcha_email_services.txt")
+print(f"   WITH CAPTCHA: {len(with_captcha)} services → saved to with_captcha_email_services.txt")
+print(f"   UNKNOWN: {len(unknown)} services → saved to unknown_email_services.txt")
