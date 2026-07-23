@@ -1,343 +1,369 @@
 #!/usr/bin/env python3
-import requests
+"""
+Universal Login Discovery Tool for Robot-Checks
+Given a login page URL, this script extracts forms, fields, CSRF tokens, 
+captcha types (reCAPTCHA, hCaptcha, Cloudflare, math, image), and outputs
+a JSON config ready to be used in a checker.
+"""
+import sys
+import re
+import json
 import time
 from urllib.parse import urljoin, urlparse
-from bs4 import BeautifulSoup  # you may need: pip install beautifulsoup4
 
-SITES = {
-    "PCOptimum": "https://www.pcoptimum.ca/login",
-    "Pepper": "https://www.pepper.com/login",
-    "Shopfully": "https://www.shopfully.com/login",
-    "Fidme": "https://www.fidme.com/login",
-    "Piggy": "https://www.piggy.eu/login",
-    "SparkLoyalty": "https://www.sparkloyalty.com/login",
-    "SessionM": "https://www.sessionm.com/login",
-    "Paytronix": "https://www.paytronix.com/login",
-    "Thanx": "https://www.thanx.com/login",
-    "BellyCard": "https://www.bellycard.com/login",
-    "Fivestars": "https://www.fivestars.com/login",
-    "FetchRewards": "https://www.fetchrewards.com/login",
-    "Cardlytics": "https://www.cardlytics.com/login",
-    "Figg": "https://www.figg.com/login",
-    "Mojorewards": "https://www.mojorewards.com/login",
-    "Point.Me": "https://www.point.me/login",
-    "TravelFreely": "https://www.travelfreely.com/login",
-    "EvReward": "https://www.evreward.com/login",
-    "Giftogram": "https://www.giftogram.com/login",
-    "Gyft": "https://www.gyft.com/login",
-    "Raise": "https://www.raise.com/login",
-    "GiftRocket": "https://www.giftrocket.com/login",
-    "Egifter": "https://www.egifter.com/login",
-    "PerfectGift": "https://www.perfectgift.com/login",
-    "GiftCards.com": "https://www.giftcards.com/login",
-    "Cardbear": "https://www.cardbear.com/login",
-    "Cardcookie": "https://www.cardcookie.com/login",
-    "Cardflip": "https://www.cardflip.com/login",
-    "Tillo": "https://www.tillo.io/login",
-    "Wegift": "https://www.wegift.io/login",
-    "Buyatab": "https://www.buyatab.com/login",
-    "GiftMall": "https://www.giftmall.co.jp/login",
-    "Giftbit.net": "https://www.giftbit.net/login",
-    "GiftCards.ca": "https://www.giftcards.ca/login",
-    "YourRewardCard": "https://www.yourrewardcard.com/login",
-    "VirtualRewardCenter": "https://www.virtualrewardcenter.com/login",
-    "MyGiftCardsPlus": "https://www.mygiftcardsplus.com/login",
-    "Avios": "https://www.avios.com/login",
-    "Nectar": "https://www.nectar.com/login",
-    "Nectar360": "https://www.nectar360.co.uk/login",
-    "Flybuys": "https://www.flybuys.com.au/login",
-    "VelocityFrequentFlyer": "https://www.velocityfrequentflyer.com/login",
-    "Qantas": "https://www.qantas.com/login",
-    "AsiaRewards": "https://www.asiarewards.com/login",
-    "KrisPlus": "https://www.krisplus.com/login",
-    "KrisFlyer": "https://www.krisflyer.com/login",
-    "AirAsiaRewards": "https://www.airasiarewards.com/login",
-    "Pepsi": "https://www.pepsi.com/login",
-    "KeurigDrPepper": "https://www.keurigdrpepper.com/login",
-    "Nike": "https://www.nike.com/login",
-    "Adidas": "https://www.adidas.com/login",
-    "Starbucks": "https://www.starbucks.com/login",
-    "McDonalds": "https://www.mcdonalds.com/login",
-    "BurgerKing": "https://www.burgerking.com/login",
-    "Subway": "https://www.subway.com/login",
-    "Chipotle": "https://www.chipotle.com/login",
-    "Dominos": "https://www.dominos.com/login",
-    "Walgreens": "https://www.walgreens.com/login",
-    "CVS": "https://www.cvs.com/login",
-    "Target": "https://www.target.com/login",
-    "SamsClub": "https://www.samsclub.com/login",
-    "BestBuy": "https://www.bestbuy.com/login",
-    "Macys": "https://www.macys.com/login",
-    "Kohls": "https://www.kohls.com/login",
-    "Nordstrom": "https://www.nordstrom.com/login",
-    "Bloomingdales": "https://www.bloomingdales.com/login",
-    "Sephora": "https://www.sephora.com/login",
-    "Ulta": "https://www.ulta.com/login",
-    "REI": "https://www.rei.com/login",
-    "Cabelas": "https://www.cabelas.com/login",
-    "BassPro": "https://www.basspro.com/login",
-    "DicksSportingGoods": "https://www.dickssportinggoods.com/login",
-    "Zappos": "https://www.zappos.com/login",
-    "Ebay": "https://www.ebay.com/login",
-    "Etsy": "https://www.etsy.com/login",
-    "Aliexpress": "https://www.aliexpress.com/login",
-    "Temu": "https://www.temu.com/login",
-    "Shein": "https://www.shein.com/login",
-    "Amazon": "https://www.amazon.com/login",
-    "UberEats": "https://www.ubereats.com/login",
-    "Doordash": "https://www.doordash.com/login",
-    "Grubhub": "https://www.grubhub.com/login",
-    "Uber": "https://www.uber.com/login",
-    "Expedia": "https://www.expedia.com/login",
-    "Booking": "https://www.booking.com/login",
-    "Hotels.com": "https://www.hotels.com/login",
-    "Priceline": "https://www.priceline.com/login",
-    "Travelocity": "https://www.travelocity.com/login",
-    "Orbitz": "https://www.orbitz.com/login",
-    "Agoda": "https://www.agoda.com/login",
-    "Trip.com": "https://www.trip.com/login",
-    "VRBO": "https://www.vrbo.com/login",
-    "Viator": "https://www.viator.com/login",
-    "GetYourGuide": "https://www.getyourguide.com/login",
-    "Klook": "https://www.klook.com/login",
-    "Tripadvisor": "https://www.tripadvisor.com/login",
-    "OpenRice": "https://www.openrice.com/login",
-    "PayPal": "https://www.paypal.com/login",
-    "Venmo": "https://venmo.com/login",
-    "Revolut": "https://www.revolut.com/login",
-    "Chime": "https://www.chime.com/login",
-    "Discover": "https://www.discover.com/login",
-    "AmericanExpress": "https://www.americanexpress.com/login",
-    "Mastercard": "https://www.mastercard.com/login",
-    "Visa": "https://www.visa.com/login",
-    "Stripe": "https://www.stripe.com/login",
-    "Klarna": "https://www.klarna.com/login",
-    "Afterpay": "https://www.afterpay.com/login",
-    "Affirm": "https://www.affirm.com/login",
-    "Zip": "https://www.zip.co/login",
-    "Splitit": "https://www.splitit.com/login",
-    "Shop.app": "https://shop.app/login",
-    "Apple": "https://appleid.apple.com/login",
-    "Microsoft": "https://login.microsoftonline.com/login",
-    "Lenovo": "https://www.lenovo.com/login",
-    "Dell": "https://www.dell.com/login",
-    "HP": "https://www.hp.com/login",
-    "Asus": "https://www.asus.com/login",
-    "Nvidia": "https://www.nvidia.com/login",
-    "Sony": "https://www.sony.com/login",
-    "PlayStation": "https://www.playstation.com/login",
-    "Xbox": "https://www.xbox.com/login",
-    "Nintendo": "https://www.nintendo.com/login",
-    "Steam": "https://steamcommunity.com/login",
-    "EpicGames": "https://www.epicgames.com/login",
-    "GOG": "https://www.gog.com/login",
-    "HumbleBundle": "https://www.humblebundle.com/login",
-    "Fanatical": "https://www.fanatical.com/login",
-    "GreenManGaming": "https://www.greenmangaming.com/login",
-    "CDKeys": "https://www.cdkeys.com/login",
-    "Newegg": "https://www.newegg.com/login",
-    "MicroCenter": "https://www.microcenter.com/login",
-    "B&HPhoto": "https://www.bhphotovideo.com/login",
-    "Adorama": "https://www.adorama.com/login",
-    "Staples": "https://www.staples.com/login",
-    "Office.com": "https://www.office.com/login",
-    "Lowe's": "https://www.lowes.com/login",
-    "HomeDepot": "https://www.homedepot.com/login",
-    "IKEA": "https://www.ikea.com/login",
-    "Wayfair": "https://www.wayfair.com/login",
-    "Overstock": "https://www.overstock.com/login",
-    "Chewy": "https://www.chewy.com/login",
-    "Petco": "https://www.petco.com/login",
-    "ProFlowers": "https://www.proflowers.com/login",
-    "EdibleArrangements": "https://www.ediblearrangements.com/login",
-    "FTD": "https://www.ftd.com/login",
-    "Teleflora": "https://www.teleflora.com/login",
-    "Moonpig": "https://www.moonpig.com/login",
-    "FunkyPigeon": "https://www.funkypigeon.com/login",
-    "Vistaprint": "https://www.vistaprint.com/login",
-    "Canva": "https://www.canva.com/login",
-    "Printful": "https://www.printful.com/login",
-    "Printify": "https://www.printify.com/login",
-    "Redbubble": "https://www.redbubble.com/login",
-    "TeePublic": "https://www.teepublic.com/login",
-    "Society6": "https://www.society6.com/login",
-    "CafePress": "https://www.cafepress.com/login",
-    "Spreadshirt": "https://www.spreadshirt.com/login",
-    "FineArtAmerica": "https://www.fineartamerica.com/login",
-    "Minted": "https://www.minted.com/login",
-    "NotOnTheHighStreet": "https://www.notonthehighstreet.com/login",
-    "Wowcher": "https://www.wowcher.co.uk/login",
-    "Influenster": "https://www.influenster.com/login",
-    "BzzAgent": "https://www.bzzagent.com/login",
-    "Crowdtap": "https://www.crowdtap.com/login",
-    "Pinecone": "https://www.pinecone.com/login",
-    "LifePointsPanel": "https://www.lifepointspanel.com/login",
-    "YouGov": "https://www.yougov.com/login",
-    "Toluna": "https://www.toluna.com/login",
-    "IpsosiSay": "https://www.ipsosisay.com/login",
-    "Attapoll": "https://www.attapoll.com/login",
-    "OnePoll": "https://www.onepoll.com/login",
-    "Prolific": "https://www.prolific.com/login",
-    "Respondent": "https://www.respondent.io/login",
-    "UserInterviews": "https://www.userinterviews.com/login",
-    "UserTesting": "https://www.usertesting.com/login",
-    "TryMata": "https://www.trymata.com/login",
-    "Ferpection": "https://www.ferpection.com/login",
-    "PlaytestCloud": "https://www.playtestcloud.com/login",
-    "Applause": "https://www.applause.com/login",
-    "UTest": "https://www.utest.com/login",
-    "TesterWork": "https://www.testerwork.com/login",
-    "Validately": "https://www.validately.com/login",
-    "ConversionCrimes": "https://www.conversioncrimes.com/login",
-    "EnrollApp": "https://www.enrollapp.com/login",
-    "TestingTime": "https://www.testingtime.com/login",
-    "Checkealos": "https://www.checkealos.com/login",
-    "Clickworker": "https://www.clickworker.com/login",
-    "Appen": "https://www.appen.com/login",
-    "TelusInternational": "https://www.telusinternational.ai/login",
-    "FieldAgent": "https://www.fieldagent.net/login",
-    "Mobee": "https://www.mobee.com/login",
-    "Gigwalk": "https://www.gigwalk.com/login",
-    "EasyShift": "https://www.easyshiftapp.com/login",
-    "Premise": "https://www.premise.com/login",
-    "Streetbees": "https://www.streetbees.com/login"
-}
+try:
+    import requests
+    from requests.adapters import HTTPAdapter
+    from requests.packages.urllib3.util.retry import Retry
+except ImportError:
+    print("Missing 'requests'. Install: pip install requests")
+    sys.exit(1)
 
-# Common login paths to try
-LOGIN_PATHS = [
-    "/login",
-    "/signin",
-    "/logon",
-    "/auth",
-    "/account/login",
-    "/users/sign_in",
-    "/session/new",
-    "/customer/login",
-    "/user/login",
-    "/member/login",
-    "/en/login",
-    "/auth/login",
-    "/login.php",
-    "/signin.php"
-]
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    print("Missing 'beautifulsoup4'. Install: pip install beautifulsoup4")
+    sys.exit(1)
 
-# Keywords in link text to look for on the homepage
-LOGIN_LINK_TEXTS = ["login", "sign in", "log in", "signin", "account", "my account"]
+# ANSI colours
+RESET = "\033[0m"
+BOLD = "\033[1m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+CYAN = "\033[96m"
+RED = "\033[91m"
 
-def find_login_url(base_url):
+def colored_print(msg, colour=GREEN):
+    print(f"{colour}{msg}{RESET}")
+
+def get_input(prompt, colour=CYAN):
+    return input(f"{colour}{prompt}{RESET}").strip()
+
+def setup_session():
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    session.mount('http://', HTTPAdapter(max_retries=retries))
+    session.mount('https://', HTTPAdapter(max_retries=retries))
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+    })
+    return session
+
+def detect_captcha(html, url, session):
     """
-    Try to find the login page for a given base URL.
-    Returns (found_url, source) or (None, None)
+    Detect captcha type and extract relevant data.
+    Returns dict with type, site_key, image_url, math_expression, etc.
     """
-    # Try common paths first
-    for path in LOGIN_PATHS:
-        url = urljoin(base_url, path)
-        try:
-            r = requests.get(url, timeout=10, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
-            if r.status_code == 200:
-                # Check if it's a real page (not a 404 error page)
-                if "404" not in r.text.lower() and "not found" not in r.text.lower():
-                    return url, "path"
-        except:
-            continue
+    result = {'type': 'none', 'site_key': None, 'image_url': None, 'math_expression': None}
+    soup = BeautifulSoup(html, 'html.parser')
 
-    # If no path works, try to scrape homepage for login link
-    try:
-        r = requests.get(base_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, 'html.parser')
-            # Find links with text containing login keywords
-            for a in soup.find_all('a', href=True):
-                text = a.get_text(strip=True).lower()
-                for keyword in LOGIN_LINK_TEXTS:
-                    if keyword in text:
-                        href = a['href']
-                        if href.startswith('http'):
-                            return href, "scrape"
-                        else:
-                            return urljoin(base_url, href), "scrape"
-    except:
-        pass
+    # 1. Check for Cloudflare challenge
+    if 'cf-browser-verification' in html or 'cf-challenge' in html:
+        result['type'] = 'cloudflare'
+        colored_print("[!] Cloudflare challenge detected – use a session with cfscrape or wait.", YELLOW)
+        return result
 
-    return None, None
+    # 2. Check for reCAPTCHA
+    recaptcha = soup.find('div', class_='g-recaptcha')
+    if recaptcha:
+        site_key = recaptcha.get('data-sitekey')
+        if site_key:
+            result['type'] = 'recaptcha'
+            result['site_key'] = site_key
+            colored_print(f"[*] reCAPTCHA detected. Site key: {site_key}", YELLOW)
+        else:
+            # Try to find it in script tags
+            scripts = soup.find_all('script')
+            for script in scripts:
+                if script.string:
+                    match = re.search(r'sitekey\s*:\s*["\']([^"\']+)["\']', script.string)
+                    if match:
+                        result['type'] = 'recaptcha'
+                        result['site_key'] = match.group(1)
+                        break
+        return result
 
-def has_captcha(url):
-    try:
-        r = requests.get(url, timeout=15, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
-        html = r.text.lower()
-        patterns = [
-            "g-recaptcha",
-            "recaptcha",
-            "hcaptcha",
-            'src="https://www.google.com/recaptcha/',
-            'src="https://www.recaptcha.net/recaptcha/',
-            'src="https://js.hcaptcha.com/',
-            'data-sitekey',
-            'data-hcaptcha',
-        ]
-        for p in patterns:
-            if p in html:
-                return True
-        return False
-    except:
+    # 3. Check for hCaptcha
+    hcaptcha = soup.find('div', class_='h-captcha')
+    if hcaptcha:
+        site_key = hcaptcha.get('data-sitekey')
+        if site_key:
+            result['type'] = 'hcaptcha'
+            result['site_key'] = site_key
+            colored_print(f"[*] hCaptcha detected. Site key: {site_key}", YELLOW)
+        return result
+
+    # 4. Check for math captcha
+    body_text = soup.get_text()
+    math_pattern = re.compile(r'(\d+)\s*([+\-*/])\s*(\d+)\s*=\s*[?]')
+    math_match = math_pattern.search(body_text)
+    if math_match:
+        result['type'] = 'math'
+        result['math_expression'] = math_match.group(0)
+        colored_print(f"[*] Math captcha detected: {math_match.group(0)}", YELLOW)
+        return result
+
+    # 5. Check for image captcha
+    img_captcha = soup.find('img', src=re.compile(r'captcha', re.I))
+    if img_captcha:
+        src = img_captcha.get('src')
+        if src:
+            if src.startswith('http'):
+                result['image_url'] = src
+            else:
+                result['image_url'] = urljoin(url, src)
+            result['type'] = 'image'
+            colored_print(f"[*] Image captcha detected: {result['image_url']}", YELLOW)
+        return result
+
+    # Also check for recaptcha script include
+    scripts = soup.find_all('script', src=re.compile(r'recaptcha/api\.js', re.I))
+    if scripts:
+        # Usually it's reCAPTCHA v2 or v3, but we need site key from elsewhere
+        result['type'] = 'recaptcha'
+        colored_print("[*] reCAPTCHA script found, but site key not auto-detected.", YELLOW)
+        # Try to find site key in data attributes or script variables
+        for script in scripts:
+            if script.string:
+                match = re.search(r'[^"\']?sitekey[^"\']*["\']([^"\']+)["\']', script.string)
+                if match:
+                    result['site_key'] = match.group(1)
+                    break
+        return result
+
+    return result
+
+def extract_form_details(html, base_url):
+    """
+    Extract form action, method, inputs, hidden fields, etc.
+    Returns dict.
+    """
+    soup = BeautifulSoup(html, 'html.parser')
+    forms = soup.find_all('form')
+    if not forms:
         return None
 
-no_captcha = []
-with_captcha = []
-error = []
-discovered_urls = {}
+    # Prefer form with password field
+    target_form = None
+    for form in forms:
+        if form.find('input', {'type': 'password'}):
+            target_form = form
+            break
+    if not target_form:
+        target_form = forms[0]  # fallback
 
-print("Discovering login pages and checking captcha...\n")
-for name, provided_url in SITES.items():
-    print(f"Processing {name}...", end="")
-    base_domain = urlparse(provided_url).netloc
-    base_url = f"https://{base_domain}" if not base_domain.startswith('http') else provided_url.split('/login')[0]
-    # Actually, use the provided URL as base (remove /login if present)
-    if provided_url.endswith('/login'):
-        base_url = provided_url[:-6]  # remove trailing /login
+    action = target_form.get('action', '')
+    method = target_form.get('method', 'get').lower()
+
+    # Resolve action URL
+    if action:
+        submit_url = urljoin(base_url, action)
     else:
-        base_url = provided_url
+        submit_url = base_url
 
-    login_url, source = find_login_url(base_url)
-    if login_url is None:
-        print(" ERROR (no login page found)")
-        error.append((name, provided_url))
-        continue
+    inputs = {}
+    for inp in target_form.find_all('input'):
+        name = inp.get('name')
+        if not name:
+            continue
+        value = inp.get('value', '')
+        input_type = inp.get('type', 'text')
+        inputs[name] = {'value': value, 'type': input_type}
 
-    discovered_urls[name] = login_url
-    print(f" found {login_url} ({source})", end="")
-    captcha = has_captcha(login_url)
-    if captcha is None:
-        print(" ERROR (unreachable)")
-        error.append((name, provided_url))
-    elif captcha:
-        print(" CAPTCHA")
-        with_captcha.append((name, login_url))
+    # Identify likely fields
+    email_field = None
+    password_field = None
+    csrf_field = None
+    for name in inputs.keys():
+        lower = name.lower()
+        if 'email' in lower or 'user' in lower or 'username' in lower:
+            if not email_field:
+                email_field = name
+        if 'password' in lower or 'pass' in lower:
+            if not password_field:
+                password_field = name
+        if 'csrf' in lower or 'token' in lower or 'authenticity' in lower or 'verification' in lower:
+            if not csrf_field:
+                csrf_field = name
+
+    # Also check hidden inputs for CSRF
+    for name, data in inputs.items():
+        if data['type'] == 'hidden':
+            if 'csrf' in name.lower() or 'token' in name.lower():
+                csrf_field = name
+                break
+
+    return {
+        'submit_url': submit_url,
+        'method': method,
+        'inputs': inputs,
+        'email_field': email_field,
+        'password_field': password_field,
+        'csrf_field': csrf_field,
+        'form_action': action,
+    }
+
+def detect_success_indicators(html):
+    """
+    Look for common success page keywords.
+    """
+    indicators = []
+    text = html.lower()
+    keywords = ['dashboard', 'logout', 'welcome', 'my account', 'profile', 'home', 'overview', 'success', 'logged in']
+    for kw in keywords:
+        if kw in text:
+            indicators.append(kw)
+    return indicators
+
+def detect_technology(html, url):
+    """
+    Try to detect technology stack: ASP.NET, PHP, Node.js, etc.
+    """
+    tech = []
+    if '__VIEWSTATE' in html:
+        tech.append('ASP.NET')
+    if 'wp-content' in html:
+        tech.append('WordPress')
+    if 'laravel' in html or 'csrf_token' in html:
+        tech.append('Laravel/PHP')
+    if 'g-recaptcha' in html:
+        tech.append('reCAPTCHA')
+    if 'hcaptcha' in html:
+        tech.append('hCaptcha')
+    if 'cloudflare' in html.lower():
+        tech.append('Cloudflare')
+    return tech
+
+def main():
+    print(f"{BOLD}{CYAN}=== Robot-Checks Login Discovery Tool ==={RESET}\n")
+    print("This tool analyses a login page and extracts everything needed to build a checker.\n")
+
+    base_url = get_input("Enter base URL (e.g., https://example.com): ")
+    if not base_url:
+        print("Aborted.")
+        return
+    base_url = base_url.rstrip('/')
+
+    login_path = get_input("Enter login page path (e.g., /login or /account/login): ")
+    if not login_path:
+        print("Aborted.")
+        return
+    if not login_path.startswith('/'):
+        login_path = '/' + login_path
+    login_url = urljoin(base_url, login_path)
+
+    colored_print(f"\n[*] Fetching login page: {login_url}", YELLOW)
+
+    session = setup_session()
+    try:
+        resp = session.get(login_url, timeout=15)
+        resp.raise_for_status()
+    except Exception as e:
+        colored_print(f"[!] Failed to fetch: {e}", RED)
+        return
+
+    html = resp.text
+    final_url = resp.url  # after redirects
+
+    # Save HTML for inspection
+    with open("discovered_login.html", "w", encoding="utf-8") as f:
+        f.write(html)
+    colored_print("[*] HTML saved to discovered_login.html", CYAN)
+
+    # Detect captcha
+    captcha_info = detect_captcha(html, login_url, session)
+
+    # Extract form details
+    form_data = extract_form_details(html, final_url)
+    if not form_data:
+        colored_print("[!] No login form found on page.", RED)
+        sys.exit(1)
+
+    # Detect technology
+    tech = detect_technology(html, login_url)
+
+    # Detect success indicators
+    success_indicators = detect_success_indicators(html)
+
+    # Build config
+    config = {
+        "base_url": base_url,
+        "login_url": login_url,
+        "final_login_url": final_url,
+        "submit_url": form_data['submit_url'],
+        "method": form_data['method'],
+        "email_field": form_data['email_field'],
+        "password_field": form_data['password_field'],
+        "csrf_field": form_data['csrf_field'],
+        "inputs": form_data['inputs'],
+        "captcha": captcha_info,
+        "technology": tech,
+        "success_indicators": success_indicators,
+        "cookies": session.cookies.get_dict(),
+    }
+
+    print("\n" + "="*60)
+    colored_print("DISCOVERED CONFIGURATION", BOLD)
+    print("="*60)
+    print(f"{BOLD}Base URL:{RESET} {base_url}")
+    print(f"{BOLD}Login URL:{RESET} {login_url}")
+    print(f"{BOLD}Final login URL (after redirect):{RESET} {final_url}")
+    print(f"{BOLD}Submit URL:{RESET} {form_data['submit_url']}")
+    print(f"{BOLD}HTTP Method:{RESET} {form_data['method']}")
+    print(f"{BOLD}Email/Username field:{RESET} {form_data['email_field'] or '[NOT FOUND]'}")
+    print(f"{BOLD}Password field:{RESET} {form_data['password_field'] or '[NOT FOUND]'}")
+    print(f"{BOLD}CSRF field:{RESET} {form_data['csrf_field'] or '[NOT FOUND]'}")
+    print(f"{BOLD}CAPTCHA type:{RESET} {captcha_info['type']}")
+    if captcha_info['type'] in ['recaptcha', 'hcaptcha']:
+        print(f"{BOLD}   Site key:{RESET} {captcha_info['site_key'] or 'unknown'}")
+    elif captcha_info['type'] == 'math':
+        print(f"{BOLD}   Math expression:{RESET} {captcha_info['math_expression']}")
+    elif captcha_info['type'] == 'image':
+        print(f"{BOLD}   Image URL:{RESET} {captcha_info['image_url']}")
+    print(f"{BOLD}Detected technology:{RESET} {', '.join(tech) if tech else 'Unknown'}")
+    print(f"{BOLD}Success indicators found in HTML:{RESET} {', '.join(success_indicators) if success_indicators else 'None'}")
+    print(f"{BOLD}Cookies from session:{RESET} {json.dumps(config['cookies'], indent=2)}")
+
+    print("\n" + "="*60)
+    colored_print("CAPTCHA BYPASS SUGGESTIONS", YELLOW)
+    if captcha_info['type'] == 'recaptcha':
+        print("  - Use 2captcha or Anti-Captcha service (pip install 2captcha-python)")
+        print("  - Extract site key and use solving API.")
+        print("  - Alternatively, use a headless browser with undetected-chromedriver.")
+    elif captcha_info['type'] == 'hcaptcha':
+        print("  - Use 2captcha service (supports hCaptcha).")
+    elif captcha_info['type'] == 'cloudflare':
+        print("  - Use cloudscraper (pip install cloudscraper) to bypass.")
+        print("  - Or use a session with proper cookies.")
+    elif captcha_info['type'] == 'math':
+        print("  - Solve the math operation and include the answer in the POST.")
+    elif captcha_info['type'] == 'image':
+        print("  - Download the image, use OCR (Tesseract) or manual solving.")
     else:
-        print(" NO CAPTCHA")
-        no_captcha.append((name, login_url))
-    time.sleep(0.5)
+        print("  - No captcha detected – proceed with standard POST.")
 
-# Save results
-with open("discovered_login_urls.txt", "w") as f:
-    for name, url in discovered_urls.items():
-        f.write(f"{name}: {url}\n")
+    # Output JSON config
+    print("\n" + "="*60)
+    colored_print("JSON CONFIG (ready for checker generation)", CYAN)
+    print(json.dumps(config, indent=2, default=str))
 
-with open("no_captcha_discovered.txt", "w") as f:
-    for name, url in no_captcha:
-        f.write(f"{name}: {url}\n")
+    # Option to save to file
+    save = get_input("\nSave config to file? (y/n): ").lower()
+    if save == 'y':
+        filename = get_input("Filename (e.g., config.json): ")
+        if filename:
+            with open(filename, 'w') as f:
+                json.dump(config, f, indent=2, default=str)
+            colored_print(f"Config saved to {filename}", GREEN)
 
-with open("with_captcha_discovered.txt", "w") as f:
-    for name, url in with_captcha:
-        f.write(f"{name}: {url}\n")
+    print("\n" + "="*60)
+    colored_print("Discovery complete.", GREEN)
 
-with open("error_discovered.txt", "w") as f:
-    for name, url in error:
-        f.write(f"{name}: {url}\n")
-
-print(f"\n✅ Done.")
-print(f"   Discovered login pages for {len(discovered_urls)} sites → saved to discovered_login_urls.txt")
-print(f"   NO CAPTCHA: {len(no_captcha)} → no_captcha_discovered.txt")
-print(f"   WITH CAPTCHA: {len(with_captcha)} → with_captcha_discovered.txt")
-print(f"   ERROR: {len(error)} → error_discovered.txt")
-print("\n⚠️  Manually verify the 'no_captcha_discovered.txt' list – some pages may load captcha via JavaScript.")
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+        sys.exit(0)
