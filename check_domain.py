@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""
-Rakuten login tester – checks credentials and prints cashback balance.
-"""
 import re
 import sys
 import json
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 LOGIN_URL = "https://www.rakuten.com/account/login"
-DASHBOARD_URL = "https://www.rakuten.com/account"
 
-def login(email, password):
+def debug_login(email, password):
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -21,87 +18,152 @@ def login(email, password):
         "Referer": LOGIN_URL,
     })
 
-    # Step 1: GET login page to extract CSRF token
+    print("[*] Fetching login page...")
     resp = session.get(LOGIN_URL, timeout=15)
-    if resp.status_code != 200:
-        return None, f"Failed to load login page (HTTP {resp.status_code})"
+    print(f"GET status: {resp.status_code}")
+    print(f"GET final URL: {resp.url}")
 
     soup = BeautifulSoup(resp.text, 'html.parser')
-    csrf_field = None
-    for inp in soup.find_all('input'):
-        if inp.get('name') and ('csrf' in inp['name'].lower() or 'token' in inp['name'].lower()):
-            csrf_field = inp
+    forms = soup.find_all('form')
+    print(f"\n[*] Found {len(forms)} forms")
+
+    # Find the login form (one with password field)
+    login_form = None
+    for form in forms:
+        if form.find('input', {'type': 'password'}):
+            login_form = form
             break
+    if not login_form:
+        print("No login form found!")
+        return
 
-    payload = {
-        "email": email,
-        "password": password,
-    }
-    if csrf_field:
-        payload[csrf_field['name']] = csrf_field.get('value', '')
+    # Display form details
+    action = login_form.get('action', '')
+    method = login_form.get('method', 'post').lower()
+    print(f"\n[*] Login form:")
+    print(f"    Action: {action}")
+    print(f"    Method: {method}")
 
-    # Step 2: POST credentials
-    post_resp = session.post(LOGIN_URL, data=payload, allow_redirects=True, timeout=15)
+    # Build submit URL
+    if action.startswith('/'):
+        submit_url = urljoin("https://www.rakuten.com", action)
+    else:
+        submit_url = action if action.startswith('http') else urljoin("https://www.rakuten.com", action)
+    print(f"    Submit URL: {submit_url}")
 
-    # Check if we are on the dashboard
+    # Extract all inputs
+    print("\n[*] Input fields:")
+    payload = {}
+    email_field = None
+    password_field = None
+    csrf_field = None
+    csrf_value = None
+
+    for inp in login_form.find_all('input'):
+        name = inp.get('name')
+        if not name:
+            continue
+        input_type = inp.get('type', 'text')
+        value = inp.get('value', '')
+        print(f"    {name}: type={input_type}, value={value[:30] if len(value) > 30 else value}")
+
+        if input_type == 'hidden':
+            payload[name] = value
+            if 'csrf' in name.lower() or 'token' in name.lower():
+                csrf_field = name
+                csrf_value = value
+        elif input_type in ['text', 'email', 'password']:
+            if 'email' in name.lower() or 'user' in name.lower() or 'username' in name.lower():
+                email_field = name
+            elif 'password' in name.lower() or 'pass' in name.lower():
+                password_field = name
+
+    # If we didn't capture CSRF via hidden, look for it separately
+    if csrf_field is None:
+        for inp in login_form.find_all('input'):
+            name = inp.get('name')
+            if name and ('csrf' in name.lower() or 'token' in name.lower()):
+                csrf_field = name
+                csrf_value = inp.get('value', '')
+                if name not in payload:
+                    payload[name] = csrf_value
+                break
+
+    print(f"\n[*] Identified fields:")
+    print(f"    Email field: {email_field}")
+    print(f"    Password field: {password_field}")
+    print(f"    CSRF field: {csrf_field} (value: {csrf_value[:20] if csrf_value else 'None'})")
+
+    # Fill in credentials
+    if email_field:
+        payload[email_field] = email
+    else:
+        # Try common names
+        for key in ['email', 'username', 'user', 'login']:
+            if key in payload:
+                payload[key] = email
+                break
+
+    if password_field:
+        payload[password_field] = password
+    else:
+        for key in ['password', 'pass', 'pwd']:
+            if key in payload:
+                payload[key] = password
+                break
+
+    print(f"\n[*] Final payload: {payload}")
+
+    # Submit
+    print(f"\n[*] Submitting to {submit_url}...")
+    if method == 'post':
+        post_resp = session.post(submit_url, data=payload, allow_redirects=True, timeout=15)
+    else:
+        post_resp = session.get(submit_url, params=payload, allow_redirects=True, timeout=15)
+
+    print(f"POST status: {post_resp.status_code}")
+    print(f"POST final URL: {post_resp.url}")
+    print(f"Cookies after POST: {session.cookies.get_dict()}")
+
+    # Save response
+    with open("rakuten_response.html", "w", encoding="utf-8") as f:
+        f.write(post_resp.text)
+    print("\n[*] Response HTML saved to rakuten_response.html")
+
+    # Check for success
     if "account" in post_resp.url.lower() and "login" not in post_resp.url.lower():
-        # Success – extract balance
+        print("\n✅ SUCCESS: Logged in! (redirected to dashboard)")
+        # Try to extract balance
         soup = BeautifulSoup(post_resp.text, 'html.parser')
-        # Look for cashback balance in various ways
+        # Look for cashback amount
         balance = None
-
-        # 1. Try to find a JSON script tag with balance
         script_tags = soup.find_all('script', type='application/json')
         for script in script_tags:
             if script.string:
                 try:
                     data = json.loads(script.string)
-                    # Common structure: { "cashBackBalance": "15.45" }
                     if "cashBackBalance" in data:
                         balance = data["cashBackBalance"]
                         break
-                    # Or inside user object
                     if "user" in data and "cashBackBalance" in data["user"]:
                         balance = data["user"]["cashBackBalance"]
                         break
                 except:
                     pass
-
-        # 2. Fallback: search HTML for balance
-        if not balance:
-            text = post_resp.text
-            # Look for patterns like "$15.45" or "15.45" in specific elements
-            # Using regex to find dollar amount after "Cash Back" or "Total Earnings"
-            patterns = [
-                r'Cash Back[^$]*\$(\d+\.\d{2})',
-                r'Total Earnings[^$]*\$(\d+\.\d{2})',
-                r'cashBackBalance["\']?\s*[:=]\s*["\']?([\d.]+)',
-            ]
-            for pat in patterns:
-                match = re.search(pat, text, re.IGNORECASE)
-                if match:
-                    balance = match.group(1)
-                    break
-
         if balance:
-            return True, f"Login successful. Cashback balance: ${balance}"
+            print(f"    Cashback balance: ${balance}")
         else:
-            # Success but couldn't find balance – still valid
-            return True, "Login successful (balance not found on this page)"
-
-    # Check for error messages
-    if "invalid" in post_resp.text.lower() or "incorrect" in post_resp.text.lower():
-        return False, "Invalid credentials"
-
-    # Fallback
-    return False, "Login failed – unknown reason"
-
-def main():
-    print("Rakuten Login Checker")
-    email = input("Email: ").strip()
-    password = input("Password: ").strip()
-    success, msg = login(email, password)
-    print(f"Result: {'✅' if success else '❌'} {msg}")
+            print("    Could not find balance on page.")
+    else:
+        print("\n❌ FAILURE: Not logged in")
+        # Check for error messages
+        if "invalid" in post_resp.text.lower() or "incorrect" in post_resp.text.lower():
+            print("    Reason: Invalid credentials (error message found)")
+        else:
+            print("    Reason: Unknown (check rakuten_response.html for details)")
+            print(f"    Response snippet: {post_resp.text[:300]}...")
 
 if __name__ == "__main__":
-    main()
+    email = input("Email: ").strip()
+    password = input("Password: ").strip()
+    debug_login(email, password)
