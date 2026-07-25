@@ -1,90 +1,74 @@
 """
-Playwright-based checker for EngageBay (app.engagebay.com)
-Handles the JavaScript-heavy React login flow.
+Checker for EngageBay (app.engagebay.com)
+Uses the /rest/api/login/get-domain endpoint.
 """
-import re
+import requests
 import threading
 from typing import Tuple
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-# ---------- Configuration ----------
-LOGIN_URL = "https://app.engagebay.com/login"
-TIMEOUT = 30000  # milliseconds (30 seconds)
-
-# Selectors – adjust if the page structure changes
-EMAIL_SELECTOR = "input[type='email'], input[name='email']"
-PASSWORD_SELECTOR = "input[type='password'], input[name='password']"
-LOGIN_BUTTON_SELECTOR = "button[type='submit'], button:has-text('Login'), button:has-text('Sign In')"
-
-# Success indicator: URL contains one of these after login
-SUCCESS_URL_PATTERN = r"dashboard|app\.engagebay\.com/(?!login)"
-
-# Failure indicators: text on the page
-FAILURE_TEXT_PATTERNS = [
-    r"invalid",
-    r"incorrect",
-    r"wrong",
-    r"error",
-    r"credentials",
-    r"try again",
-]
-
+BASE_URL = "https://app.engagebay.com"
+LOGIN_URL = BASE_URL + "/rest/api/login/get-domain"
+TIMEOUT = 15
 
 def check(email: str, password: str) -> Tuple[bool, str]:
-    """
-    Attempt to log in to EngageBay using Playwright.
-    Returns (success: bool, message: str)
-    """
     proxy = getattr(threading.current_thread(), 'proxy', None)
 
-    with sync_playwright() as p:
-        # Launch browser
-        browser_launch_options = {"headless": True}
-        if proxy:
-            browser_launch_options["proxy"] = {"server": proxy}
+    session = requests.Session()
+    if proxy:
+        session.proxies = {"http": proxy, "https": proxy}
 
-        browser = p.chromium.launch(**browser_launch_options)
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": BASE_URL,
+        "Referer": BASE_URL + "/login",
+        "Connection": "keep-alive",
+    })
 
+    payload = {
+        "email": email,
+        "password": password,
+    }
+
+    try:
+        resp = session.post(LOGIN_URL, data=payload, timeout=TIMEOUT)
+        # The response should be JSON
         try:
-            # Navigate to login page
-            page.goto(LOGIN_URL, timeout=TIMEOUT)
+            data = resp.json()
+        except ValueError:
+            return False, f"Invalid JSON response: {resp.text[:100]}"
 
-            # Wait for the login form to be ready
-            page.wait_for_selector(EMAIL_SELECTOR, timeout=TIMEOUT)
+        # Check for success indicator
+        # If login succeeds, the response likely contains domain info and status.
+        # The known failure message is: "The username or password you entered is incorrect."
+        if isinstance(data, dict):
+            # Look for error message
+            if "message" in data and "incorrect" in data["message"].lower():
+                return False, f"Login failed: {data['message']}"
+            # If no error and status is success, treat as valid
+            if data.get("status") == "success" or data.get("success") is True:
+                return True, "Login successful"
+            # If there is a domain field, also success
+            if "domain" in data:
+                return True, f"Login successful (domain: {data['domain']})"
+            # Fallback: if we have a response and no error, assume success
+            # But to be safe, check if the error string is not present
+            if "The username or password you entered is incorrect" not in resp.text:
+                return True, "Login successful (assumed from response)"
+            else:
+                return False, "Invalid credentials (error message found)"
+        else:
+            # If response is not a dict, maybe it's a plain string
+            if "incorrect" in resp.text.lower():
+                return False, "Invalid credentials"
+            return True, "Login successful"
 
-            # Fill credentials
-            page.fill(EMAIL_SELECTOR, email)
-            page.fill(PASSWORD_SELECTOR, password)
-
-            # Click login button
-            page.click(LOGIN_BUTTON_SELECTOR)
-
-            # Wait for navigation or response
-            try:
-                # Wait for URL to change (success)
-                page.wait_for_url(re.compile(SUCCESS_URL_PATTERN, re.I), timeout=TIMEOUT)
-                return True, f"Login successful – redirected to {page.url}"
-            except PlaywrightTimeout:
-                # URL didn't change; check for error messages
-                page_content = page.content().lower()
-                for pattern in FAILURE_TEXT_PATTERNS:
-                    if re.search(pattern, page_content, re.I):
-                        return False, f"Login failed: '{pattern}' found in page"
-
-                # Check if still on login page
-                if "login" in page.url.lower():
-                    return False, "Login failed – still on login page (no error message detected)"
-
-                return False, f"Login failed – unknown reason (URL: {page.url})"
-
-        except PlaywrightTimeout as e:
-            return False, f"Timeout: {str(e)}"
-        except Exception as e:
-            return False, f"Unexpected error: {str(e)}"
-        finally:
-            browser.close()
+    except requests.exceptions.Timeout:
+        return False, "Request timed out"
+    except requests.exceptions.ConnectionError:
+        return False, "Connection error"
+    except Exception as e:
+        return False, f"Unexpected error: {str(e)}"
