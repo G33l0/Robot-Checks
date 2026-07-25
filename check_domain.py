@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from checkers.rakuten import check
+from checkers.engagebay import check
 
 email = input("Email: ").strip()
 password = input("Password: ").strip()
