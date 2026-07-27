@@ -37,35 +37,28 @@ def check(username: str, password: str) -> Tuple[bool, str]:
     })
 
     try:
-        # Step 1: GET login page to extract tokens
         resp = session.get(LOGIN_URL, timeout=TIMEOUT)
         if resp.status_code != 200:
             return False, f"Failed to load login page (HTTP {resp.status_code})"
 
         html = resp.text
-
-        # Find form action
         form_action = LOGIN_URL
         form_match = re.search(r'<form[^>]*action="([^"]+)"', html, re.I)
         if form_match:
             form_action = urljoin(BASE_URL, form_match.group(1))
 
-        # Extract all hidden inputs (csrf, state, etc.)
         payload = {"username": username, "password": password}
         hidden_pattern = r'<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]+)"'
         for name, value in re.findall(hidden_pattern, html, re.I):
             if name.lower() not in ["username", "password"]:
                 payload[name] = value
 
-        # Also check for any meta CSRF token
         csrf_meta = re.search(r'<meta[^>]*name="csrf-token"[^>]*content="([^"]+)"', html, re.I)
         if csrf_meta:
             payload["csrf_token"] = csrf_meta.group(1)
 
-        # Step 2: POST credentials
         post_resp = session.post(form_action, data=payload, allow_redirects=False, timeout=TIMEOUT)
 
-        # Step 3: Determine success
         if post_resp.status_code in (301, 302):
             location = post_resp.headers.get("Location", "").lower()
             if any(x in location for x in ["callback", "dashboard", "home", "account"]):
@@ -73,7 +66,6 @@ def check(username: str, password: str) -> Tuple[bool, str]:
             else:
                 return False, "Login failed (redirected back to login)"
 
-        # If status 200, inspect HTML
         html = post_resp.text.lower()
         if "invalid" in html or "incorrect" in html or "error" in html:
             return False, "Invalid credentials"
