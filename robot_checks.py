@@ -5,7 +5,7 @@ Author: IamG2
 Features: dynamic checkers, concurrency, proxy rotation, delay, color UI,
           separate output files per checker with timestamps,
           graceful Ctrl+C handling, Python 3.6+ compatible,
-          adaptive banner, built-in log converter (saves to input.txt).
+          adaptive banner, built-in log converter, real-time ETA.
 """
 import os
 import sys
@@ -19,7 +19,7 @@ import traceback
 import shutil
 import re
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Callable, Optional, Tuple
 
 # ---------- Check for required libraries ----------
@@ -99,7 +99,6 @@ class ProxyManager:
                 print(f"{Fore.RED}Error reading proxy file: {e}")
 
     def get_proxy(self) -> Optional[str]:
-        """Return next proxy in round-robin fashion (thread-safe)."""
         if not self.proxies:
             return None
         with self.lock:
@@ -174,6 +173,7 @@ class CheckerRunner:
         self.processed = 0
         self.valid_count = 0
         self.invalid_count = 0
+        self.start_time = 0
         self.proxy_manager = None
         proxy_file = config.get("proxy_file")
         if proxy_file and os.path.exists(proxy_file):
@@ -193,7 +193,6 @@ class CheckerRunner:
         # Open files for writing (thread-safe with lock)
         self.valid_fh = open(self.valid_file, 'w')
         self.invalid_fh = open(self.invalid_file, 'w')
-        # Write header
         self.valid_fh.write(f"# Valid results for {checker_name} - {datetime.now().ctime()}\n")
         self.invalid_fh.write(f"# Invalid results for {checker_name} - {datetime.now().ctime()}\n")
 
@@ -204,7 +203,6 @@ class CheckerRunner:
             line = f"{status} {email}:{password} -> {message}"
             print(line)
 
-            # Write to appropriate file
             if success:
                 self.valid_fh.write(f"{email}:{password} -> {message}\n")
                 self.valid_fh.flush()
@@ -216,8 +214,28 @@ class CheckerRunner:
 
             self.results.append((email, password, success, message))
 
+    def _update_progress(self):
+        """Update the progress bar line (ETA)."""
+        if self.total == 0:
+            return
+        processed = self.processed
+        remaining = self.total - processed
+        if processed == 0:
+            eta = "Calculating..."
+        else:
+            elapsed = time.time() - self.start_time
+            rate = processed / elapsed
+            rem_sec = remaining / rate if rate > 0 else 0
+            if rem_sec > 3600:
+                eta = f"{int(rem_sec // 3600)}h {int((rem_sec % 3600) // 60)}m"
+            elif rem_sec > 60:
+                eta = f"{int(rem_sec // 60)}m {int(rem_sec % 60)}s"
+            else:
+                eta = f"{int(rem_sec)}s"
+        # Print over the same line using carriage return
+        print(f"\r[Processed: {processed}/{self.total} | Remaining: {remaining} | ETA: {eta}]", end="", flush=True)
+
     def close_files(self):
-        """Close output file handles."""
         if hasattr(self, 'valid_fh') and not self.valid_fh.closed:
             self.valid_fh.close()
         if hasattr(self, 'invalid_fh') and not self.invalid_fh.closed:
@@ -229,6 +247,7 @@ class CheckerRunner:
         self.valid_count = 0
         self.invalid_count = 0
         self.results = []
+        self.start_time = time.time()
 
         threads = self.config.get("threads", 10)
         timeout = self.config.get("timeout", 10)
@@ -244,7 +263,6 @@ class CheckerRunner:
                 future = executor.submit(self._check_one, email, password, timeout, delay)
                 future_to_cred[future] = (email, password)
 
-            # Process results as they complete
             for future in as_completed(future_to_cred):
                 email, password = future_to_cred[future]
                 try:
@@ -252,33 +270,35 @@ class CheckerRunner:
                 except Exception as e:
                     success, message = False, f"Error: {str(e)}"
                 self._print_result(email, password, success, message)
+                self._update_progress()
 
         except KeyboardInterrupt:
             print(f"\n{Fore.YELLOW}Interrupted by user. Shutting down gracefully...")
-            # Cancel pending futures
             for f in future_to_cred:
                 f.cancel()
-            # Shutdown executor with compatibility for Python <3.9
             if hasattr(executor, 'shutdown'):
                 try:
                     executor.shutdown(wait=False, cancel_futures=True)
                 except TypeError:
-                    # Python <3.9: cancel_futures not supported
                     executor.shutdown(wait=False)
             else:
-                # Very old Python fallback
                 executor.shutdown(wait=False)
-            raise  # Re-raise to let main handler catch and exit
+            self.close_files()
+            print(f"\n{Fore.CYAN}=== Check Interrupted ===")
+            print(f"{Fore.GREEN}Valid: {self.valid_count}")
+            print(f"{Fore.RED}Invalid: {self.invalid_count}")
+            print(f"{Fore.YELLOW}Processed: {self.processed} / {self.total}")
+            sys.exit(0)
 
         except Exception as e:
-            # Unexpected error: ensure files are closed before re-raising
             self.close_files()
             raise
 
         finally:
             self.close_files()
+            # Print newline after progress
+            print()
 
-        # Normal completion: show summary
         summary = {
             "total": self.total,
             "valid": self.valid_count,
@@ -295,12 +315,9 @@ class CheckerRunner:
         return summary
 
     def _check_one(self, email: str, password: str, timeout: int, delay: float) -> Tuple[bool, str]:
-        """Single check with proxy assignment, delay, and timeout enforcement."""
-        # Set thread-local proxy
         proxy = self.proxy_manager.get_proxy() if self.proxy_manager else None
         threading.current_thread().proxy = proxy
 
-        # Apply delay with jitter
         if delay > 0:
             jitter = random.uniform(0.8, 1.2)
             time.sleep(delay * jitter)
@@ -332,30 +349,20 @@ class RobotChecksUI:
         self.running = True
 
     def banner(self):
-        # Clear screen with fallback
         try:
             os.system('cls' if os.name == 'nt' else 'clear')
         except:
             pass
-
-        # Determine terminal width for adaptive banner
         try:
             term_width = shutil.get_terminal_size().columns
         except:
             term_width = 80
-
-        # Choose figlet font based on width
-        if term_width < 80:
-            font = "standard"
-        else:
-            font = "slant"
-
+        font = "standard" if term_width < 80 else "slant"
         try:
             fig = pyfiglet.Figlet(font=font, width=term_width)
             banner_text = fig.renderText('Robot-Checks')
         except:
             banner_text = "Robot-Checks\n"
-
         print(Fore.RED + banner_text)
         print(Fore.WHITE + f"                    v{VERSION} - Multi-Checker Tool\n")
         print(Fore.YELLOW + "                              Author: IamG2")
@@ -386,7 +393,6 @@ class RobotChecksUI:
                 input("Press Enter to continue.")
 
     def convert_logs_menu(self):
-        """Convert messy log file to 'email:password' format and save as input.txt."""
         self.banner()
         print(f"{Fore.WHITE}Convert Messy Logs to Standard Format")
         print(f"{Fore.CYAN}This tool reads a file with lines like:")
@@ -394,7 +400,7 @@ class RobotChecksUI:
         print(f"{Fore.CYAN}  Password: secret")
         print(f"{Fore.CYAN}  Username: john_doe")
         print(f"{Fore.CYAN}  Password: 123456")
-        print(f"{Fore.CYAN}And outputs 'identifier:password' lines, skipping invalid entries.\n")
+        print(f"{Fore.CYAN}And outputs 'identifier:password' lines.\n")
 
         default_input = "messy.txt"
         input_file = input(f"{Fore.YELLOW}Enter path to messy log file [{default_input}]: ").strip()
@@ -405,13 +411,11 @@ class RobotChecksUI:
             input("Press Enter to continue.")
             return
 
-        # Default output is input.txt (root of tool)
         default_output = "input.txt"
         output_file = input(f"{Fore.YELLOW}Enter output file path [{default_output}]: ").strip()
         if not output_file:
             output_file = default_output
 
-        # If output file exists, ask for overwrite confirmation
         if os.path.exists(output_file):
             confirm = input(f"{Fore.YELLOW}File '{output_file}' already exists. Overwrite? (y/n): ").strip().lower()
             if confirm != 'y':
@@ -427,7 +431,6 @@ class RobotChecksUI:
             input("Press Enter to continue.")
             return
 
-        # Parse and convert
         email = None
         password = None
         output_lines = []
@@ -437,29 +440,19 @@ class RobotChecksUI:
             line = raw_line.strip()
             if not line:
                 continue
-
-            # Skip lines that are clearly metadata
             if any(phrase in line.lower() for phrase in skip_phrases):
                 continue
-
-            # If the line already contains a colon and is not prefixed, treat as already formatted
             if ':' in line and not any(line.lower().startswith(prefix) for prefix in ['email:', 'username:', 'password:', 'url:']):
-                # But we must be careful not to capture lines like "source: something" – already skipped
-                # Check if it looks like email:pass (contains @ or no space)
                 if '@' in line or (':' in line and ' ' not in line):
                     output_lines.append(line)
                 continue
-
-            # Detect Email: or Username:
             if line.lower().startswith('email:'):
                 email = line.split(':', 1)[1].strip()
-                # If we have a password from previous iteration, output now (shouldn't happen, but safe)
                 if password is not None and email and password and not any(phrase in password.lower() for phrase in skip_phrases):
                     output_lines.append(f"{email}:{password}")
                     email = None
                     password = None
                 continue
-
             if line.lower().startswith('username:'):
                 email = line.split(':', 1)[1].strip()
                 if password is not None and email and password and not any(phrase in password.lower() for phrase in skip_phrases):
@@ -467,22 +460,18 @@ class RobotChecksUI:
                     email = None
                     password = None
                 continue
-
-            # Detect Password:
             if line.lower().startswith('password:'):
                 password = line.split(':', 1)[1].strip()
-                # If we have an email waiting, output pair
                 if email is not None and password and not any(phrase in password.lower() for phrase in skip_phrases):
                     output_lines.append(f"{email}:{password}")
                     email = None
                     password = None
                 continue
 
-        # After loop, if any remaining (should not happen)
         if email and password and not any(phrase in password.lower() for phrase in skip_phrases):
             output_lines.append(f"{email}:{password}")
 
-        # Deduplicate while preserving order (optional)
+        # deduplicate
         seen = set()
         unique_lines = []
         for line in output_lines:
@@ -490,7 +479,6 @@ class RobotChecksUI:
                 seen.add(line)
                 unique_lines.append(line)
 
-        # Write output
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
                 for line in unique_lines:
@@ -510,7 +498,6 @@ class RobotChecksUI:
                 print(f"{Fore.YELLOW}No checkers available. Please add checker modules to '{CHECKERS_FOLDER}/'")
                 input("Press Enter to return.")
                 return
-
             print(f"{Fore.WHITE}Available Checkers:")
             for idx, name in enumerate(checkers, 1):
                 print(f"  {Fore.CYAN}{idx}. {name}")
